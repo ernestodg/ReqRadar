@@ -1,0 +1,39 @@
+Requirement ID,Type,Title,Description,Status,Parent ID,Related To,Tags,Owner
+BR-STATUS-01,Business Rule,Complete booking status,A booking may be marked complete after all checklist items and required photos are submitted.,Approved,,AC-BOOK-01;TC-BOOK-01,status;booking,Maya
+BR-STATUS-02,Business Rule,Reopen completed booking,Only administrators may reopen a completed booking after entering a required audit note.,Approved,,AC-BOOK-17;TC-BOOK-22;Q-001,status;booking,Maya
+BR-PERM-01,Business Rule,Supervisor permissions,Supervisors can reassign contractors in their region but cannot reopen completed bookings.,Approved,,BR-STATUS-02;REQ-BOOK-04,permissions,Maya
+BR-PERM-02,Business Rule,Administrator reopen permission,Administrators may reopen completed bookings when an audit note is provided.,Draft,,BR-STATUS-02;AC-BOOK-17,permissions,Maya
+REQ-BOOK-01,Functional Requirement,Create booking,Dispatchers create a booking with customer address schedule window and job type.,Approved,,AC-BOOK-01;TC-BOOK-01,booking,Noah
+REQ-BOOK-02,Functional Requirement,Update schedule window,Dispatchers can update the schedule window before a contractor accepts the job.,Approved,,AC-SCHED-01;TC-SCHED-01,schedule,Noah
+REQ-BOOK-03,Functional Requirement,Complete checklist,Contractors must complete the job checklist before submitting completion.,Approved,,BR-STATUS-01;AC-CHECK-01,checklist,Iris
+REQ-BOOK-04,Functional Requirement,Reassign contractor,Supervisors can reassign an open booking to a different contractor when the new contractor has matching skills.,Approved,,BR-PERM-01;AC-BOOK-09;REQ-CON-02,contractor,Maya
+REQ-BOOK-05,Functional Requirement,Add completion photo,Contractors upload at least one completion photo before completing a booking.,Approved,,BR-STATUS-01;AC-PHOTO-01,photo,Iris
+REQ-BOOK-06,Functional Requirement,View booking timeline,Users can view status changes schedule changes reassignment events and reopen audit notes on a booking timeline.,Approved,,TC-BOOK-06;Q-003;BR-STATUS-02,booking,Noah
+REQ-CON-01,Functional Requirement,Contractor availability,Contractors can mark availability by day and region.,Approved,,AC-CON-01;TC-CON-01,contractor,Zoe
+REQ-CON-02,Functional Requirement,Contractor skill match,Bookings show eligible contractors based on required skill region and current availability.,Approved,,REQ-BOOK-04;TC-CON-02,contractor,Zoe
+REQ-SCHED-01,Functional Requirement,Schedule conflict warning,Radar warns dispatchers when a booking schedule overlaps an assigned contractor commitment.,Approved,,REQ-BOOK-02;AC-SCHED-01,schedule,Zoe
+REQ-SCHED-02,Functional Requirement,Same day priority,Same day emergency bookings appear at the top of the schedule queue.,Approved,,TC-SCHED-02,schedule,Zoe
+REQ-CHECK-01,Functional Requirement,Checklist template,Administrators configure checklist templates by job type.,Approved,,REQ-BOOK-03;AC-CHECK-01,checklist,Iris
+REQ-CHECK-02,Functional Requirement,Required checklist answers,Required checklist questions block completion until answered.,Approved,,BR-STATUS-01;TC-CHECK-02,checklist,Iris
+REQ-PHOTO-01,Functional Requirement,Photo metadata,Uploaded photos store timestamp contractor booking identifier and GPS availability when provided.,Approved,,REQ-BOOK-05;TC-PHOTO-01,photo,Iris
+REQ-PHOTO-02,Functional Requirement,Photo review,Supervisors can review completion photos before invoice approval.,Approved,,REQ-BOOK-05;BR-PERM-01,photo,Maya
+AC-BOOK-01,Acceptance Criteria,Booking creation fields,Given a dispatcher creates a booking then address schedule window and job type are required.,Approved,REQ-BOOK-01,TC-BOOK-01,acceptance,Noah
+AC-BOOK-09,Acceptance Criteria,Reassignment action,Given a supervisor views an open booking then the reassign contractor action is available only for eligible contractors.,Approved,REQ-BOOK-04,BR-PERM-01;TC-BOOK-09,acceptance,Maya
+AC-BOOK-17,Acceptance Criteria,Reopen button,Given an administrator views a completed booking then a reopen action is visible and requires an audit note.,Approved,BR-STATUS-02,TC-BOOK-22;BR-PERM-02,acceptance,Maya
+AC-SCHED-01,Acceptance Criteria,Schedule conflict copy,Given a dispatcher selects a conflicting schedule then a conflict warning names the contractor commitment.,Approved,REQ-SCHED-01,REQ-BOOK-02;TC-SCHED-01,acceptance,Zoe
+AC-CHECK-01,Acceptance Criteria,Checklist completion block,Given required checklist answers are missing then the complete booking button is disabled.,Approved,REQ-CHECK-02,BR-STATUS-01;TC-CHECK-02,acceptance,Iris
+AC-PHOTO-01,Acceptance Criteria,Completion photo required,Given a booking requires photos then completion is blocked until a photo is uploaded.,Approved,REQ-BOOK-05,BR-STATUS-01;TC-PHOTO-01,acceptance,Iris
+Q-001,Question,Reopen audit trail,What audit note fields are required when an administrator reopens a completed booking?,Open,BR-STATUS-02,AC-BOOK-17;BR-PERM-02,question,Maya
+Q-002,Question,Contractor timezone,Should contractor availability use contractor timezone or dispatcher timezone?,Open,REQ-CON-01,REQ-SCHED-01,question,Zoe
+Q-003,Question,Timeline retention,How long should booking timeline events and reopen audit notes remain visible to support users?,Open,REQ-BOOK-06,BR-STATUS-02,question,Noah
+Q-004,Question,Admin audit reporting,Do administrators need a monthly report of reopened bookings?,Open,BR-PERM-02,BR-STATUS-02,question,Maya
+TC-BOOK-01,Test Case,Create booking happy path,Verify dispatcher can create a booking with required fields and sees it in the queue.,Approved,REQ-BOOK-01,AC-BOOK-01,test,Noah
+TC-BOOK-06,Test Case,Timeline shows reassignment and reopen,Verify booking timeline includes reassignment schedule changes and reopen audit notes.,Approved,REQ-BOOK-06,REQ-BOOK-04;BR-STATUS-02,test,Noah
+TC-BOOK-09,Test Case,Supervisor reassigns booking,Verify supervisor can reassign an open booking to an eligible contractor with matching skills.,Approved,REQ-BOOK-04,AC-BOOK-09;REQ-CON-02,test,Maya
+TC-BOOK-22,Test Case,Administrator reopens completed booking,Verify administrator can reopen a completed booking only after entering an audit note.,Approved,BR-STATUS-02,AC-BOOK-17;Q-001;BR-PERM-02,test,Maya
+TC-SCHED-01,Test Case,Schedule conflict warning,Verify overlapping schedule assignment shows a conflict warning.,Approved,REQ-SCHED-01,AC-SCHED-01,test,Zoe
+TC-SCHED-02,Test Case,Emergency booking priority,Verify same day emergency booking appears above normal priority work.,Approved,REQ-SCHED-02,,test,Zoe
+TC-CHECK-02,Test Case,Required checklist block,Verify completion is blocked until required checklist questions are answered.,Approved,REQ-CHECK-02,AC-CHECK-01,test,Iris
+TC-PHOTO-01,Test Case,Photo required to complete,Verify completion is blocked until a photo is uploaded for photo-required job types and metadata is stored.,Approved,REQ-PHOTO-01,AC-PHOTO-01,test,Iris
+TC-CON-01,Test Case,Contractor availability by region,Verify contractor availability can be entered by day and region.,Approved,REQ-CON-01,,test,Zoe
+TC-CON-02,Test Case,Skill match and availability filter,Verify booking assignment lists only contractors with matching skill region and availability.,Approved,REQ-CON-02;REQ-BOOK-04,test,Zoe
