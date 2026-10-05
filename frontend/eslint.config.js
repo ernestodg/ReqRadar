@@ -11,7 +11,7 @@ export default [
     languageOptions: {
       parser: tsParser,
       parserOptions: { ecmaVersion: "latest", sourceType: "module" },
-      globals: { document: "readonly", fetch: "readonly", HTMLElement: "readonly", RequestInit: "readonly", console: "readonly" }
+      globals: { document: "readonly", fetch: "readonly", File: "readonly", HTMLElement: "readonly", RequestInit: "readonly", console: "readonly" }
     },
     rules: {
       "no-unused-vars": "off",

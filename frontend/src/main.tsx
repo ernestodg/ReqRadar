@@ -84,10 +84,18 @@ function ProjectWorkspace({ project }: { project: Project }) {
   const [versionLabel, setVersionLabel] = useState("V1");
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
+  const [uploadKey, setUploadKey] = useState(0);
   const [comparisonId, setComparisonId] = useState<string | null>(null);
   const detail = useQuery({ queryKey: ["project", project.id], queryFn: () => request<{ imports: ImportBatch[]; comparisons: Comparison[] }>(`/projects/${project.id}`) });
   const comparison = useQuery({ queryKey: ["comparison", comparisonId], queryFn: () => request<{ comparison: Comparison; changes: Change[]; findings: Finding[] }>(`/projects/${project.id}/comparisons/${comparisonId}`), enabled: Boolean(comparisonId) });
-  const importMutation = useMutation({ mutationFn: () => request<ImportBatch>(`/projects/${project.id}/imports`, { method: "POST", body: JSON.stringify({ filename, version_label: versionLabel, csv_text: csvText, mapping }) }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["project", project.id] }); setCsvText(""); setValidationMessages(["Import complete"]); } });
+  const importMutation = useMutation({ mutationFn: () => request<ImportBatch>(`/projects/${project.id}/imports`, { method: "POST", body: JSON.stringify({ filename, version_label: versionLabel, csv_text: csvText, mapping }) }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["project", project.id] }); setCsvText(""); setFilename(""); setUploadKey((value) => value + 1); setValidationMessages(["Import complete"]); } });
+  const handleSelectedFile = async (file: File | undefined) => {
+    if (!file) return;
+    setFilename(file.name);
+    setCsvText(await file.text());
+    setMapping({ "Requirement ID": "Requirement ID", Type: "Type", Title: "Title", Description: "Description", Status: "Status", "Parent ID": "Parent ID", "Related To": "Related To", Tags: "Tags", Owner: "Owner" });
+    setValidationMessages([`${file.name} ready for mapping`, "Requirement ID and Title mapped"]);
+  };
   const compareMutation = useMutation({ mutationFn: () => { const imports = detail.data?.imports || []; return request<Comparison>(`/projects/${project.id}/comparisons`, { method: "POST", body: JSON.stringify({ baseline_import_id: imports[imports.length - 2]?.id, comparison_import_id: imports[imports.length - 1]?.id }) }); }, onSuccess: (data) => { setComparisonId(data.id); queryClient.invalidateQueries({ queryKey: ["project", project.id] }); } });
   return (
     <div className="space-y-5">
@@ -98,7 +106,7 @@ function ProjectWorkspace({ project }: { project: Project }) {
       <div className="grid grid-cols-[420px_1fr] gap-5">
         <section className="panel">
           <h3 className="section-title"><FileUp size={16} /> Upload New Version</h3>
-          <input data-testid="csv-upload" type="file" accept=".csv" className="text-sm" onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; setFilename(file.name); setCsvText(await file.text()); setMapping({ "Requirement ID": "Requirement ID", Type: "Type", Title: "Title", Description: "Description", Status: "Status", "Parent ID": "Parent ID", "Related To": "Related To", Tags: "Tags", Owner: "Owner" }); setValidationMessages([`${file.name} ready for mapping`, "Requirement ID and Title mapped"]); }} />
+          <input key={uploadKey} data-testid="csv-upload" type="file" accept=".csv" className="text-sm" onInput={(e) => handleSelectedFile(e.currentTarget.files?.[0])} onChange={(e) => handleSelectedFile(e.currentTarget.files?.[0])} />
           <input data-testid="version-label" className="field" value={versionLabel} onChange={(e) => setVersionLabel(e.target.value)} placeholder="Version label" />
           <MappingEditor mapping={mapping} setMapping={setMapping} />
           <div data-testid="validation-messages" className="space-y-1 text-xs text-slate-600">{validationMessages.map((message) => <div key={message}>{message}</div>)}</div>

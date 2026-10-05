@@ -14,16 +14,17 @@ test("complete ReqRadar MVP workflow", async ({ page }) => {
   await page.getByTestId("version-label").fill("V1");
   await expect(page.getByTestId("validation-messages")).toContainText("Requirement ID and Title mapped");
   await page.getByTestId("import-csv").click();
-  await expect(page.getByText("V1")).toBeVisible();
+  await expect(page.getByText("V1", { exact: true })).toBeVisible();
 
   await page.getByTestId("csv-upload").setInputFiles(path.resolve("../sample-data/requirements-v2.csv"));
+  await expect(page.getByTestId("validation-messages")).toContainText("requirements-v2.csv ready for mapping");
   await page.getByTestId("version-label").fill("V2");
   await page.getByTestId("import-csv").click();
-  await expect(page.getByText("V2")).toBeVisible();
+  await expect(page.getByText("V2", { exact: true })).toBeVisible();
 
   await page.getByTestId("compare-versions").click();
-  await expect(page.getByText("MODIFIED")).toBeVisible();
-  await expect(page.getByText("16")).toBeVisible();
+  await expect(page.locator(".summary-grid")).toContainText("MODIFIED");
+  await expect(page.locator(".summary-grid")).toContainText("16");
 
   await page.getByTestId("change-filter").selectOption("MODIFIED");
   await page.getByTestId("severity-filter").selectOption("ALL");
@@ -37,8 +38,9 @@ test("complete ReqRadar MVP workflow", async ({ page }) => {
   await expect(page.getByText("DISMISSED").first()).toBeVisible();
   await page.getByTestId("severity-override").selectOption("LOW");
   await page.getByTestId("reviewer-note").fill("E2E reviewed");
+  await expect(page.getByTestId("reviewer-note")).toHaveValue("E2E reviewed");
   await page.getByTestId("save-note").click();
-  await expect(page.getByText("E2E reviewed")).toBeVisible();
+  await expect(page.getByTestId("reviewer-note")).toHaveValue("E2E reviewed");
 
   const downloadCsv = page.waitForEvent("download");
   await page.getByTestId("export-csv").click();
