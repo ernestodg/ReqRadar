@@ -16,10 +16,11 @@
 2. Build command: `npm ci && npm run build`.
 3. Output directory: `dist`.
 4. Set `VITE_API_URL` to the deployed API origin.
+5. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth.
 
 ## Manual Services
 
-- Supabase Auth: `SUPABASE_URL` for JWKS-based backend JWT verification, plus `SUPABASE_ANON_KEY` for the client/Supabase SDK where appropriate.
+- Supabase Auth: backend `SUPABASE_URL` for JWKS-based JWT verification; frontend `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for email/password sign-in.
 - Paddle billing: `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_ENV`, and price IDs.
 - Optional AI: OpenAI or Ollama provider settings.
 - Optional Sentry: `SENTRY_DSN`.

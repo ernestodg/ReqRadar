@@ -71,7 +71,7 @@ button { color: inherit; }
 .logo-mark .radar-sweep { stroke-width: 3.4; }
 .logo-mark .radar-center, .logo-mark .radar-blip { fill: #fff; }
 .header-actions { display: flex; align-items: center; gap: 0.65rem; }
-.dev-pill, .theme-control {
+.dev-pill, .user-pill, .theme-control {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
@@ -82,6 +82,13 @@ button { color: inherit; }
   color: var(--muted);
   padding: 0 0.65rem;
   font-size: 0.86rem;
+}
+.user-pill {
+  max-width: 18rem;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .theme-control select {
   border: 0;
@@ -118,6 +125,66 @@ button { color: inherit; }
   overflow-wrap: anywhere;
 }
 :root[data-theme="dark"] .form-error { color: #fca5a5; }
+.form-success {
+  margin: 0;
+  color: #047857;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+:root[data-theme="dark"] .form-success { color: #86efac; }
+
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: var(--bg);
+  padding: 1.25rem;
+}
+.auth-panel {
+  display: grid;
+  width: min(100%, 28rem);
+  gap: 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  padding: 1.4rem;
+  box-shadow: var(--shadow);
+}
+.status-panel { text-align: left; }
+.status-panel p { margin: 0; color: var(--muted); }
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--surface-muted);
+  padding: 0.25rem;
+}
+.auth-tabs button {
+  min-height: 2.15rem;
+  border: 0;
+  border-radius: 0.32rem;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+}
+.auth-tabs button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.auth-form {
+  display: grid;
+  gap: 0.8rem;
+}
+.auth-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
 .sidebar-label {
   margin: 1.3rem 0 0.65rem;
   color: var(--muted);

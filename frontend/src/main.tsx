@@ -1,10 +1,13 @@
 import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileUp, Monitor, Moon, Plus, RefreshCw, ShieldCheck, Sun } from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
+import { Download, FileUp, LogOut, Monitor, Moon, Plus, RefreshCw, ShieldCheck, Sun } from "lucide-react";
+import { ApiAuthError, request } from "./lib/api";
+import { frontendConfig } from "./lib/config";
+import { supabase } from "./lib/supabase";
 import "./styles.css";
 
-const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const client = new QueryClient();
 
 type Project = { id: string; name: string; description: string; requirements_count: number; changed_requirements: number; unresolved_findings: number };
@@ -14,15 +17,6 @@ type Change = { id: string; external_id: string; change_type: string; changed_fi
 type Finding = { id: string; requirement_change_id: string; impacted_requirement_external_id: string; severity: string; confidence: number; detection_method: string; reason: string; review_status: string; reviewer_note?: string };
 type ThemePreference = "system" | "light" | "dark";
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`, { ...options, headers: { "content-type": "application/json", ...(options.headers || {}) } });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
-    throw new Error(error.error?.message || "Radar could not complete the request.");
-  }
-  return response.json();
-}
-
 function downloadBase64(name: string, mediaType: string, content: string) {
   const link = document.createElement("a");
   link.href = `data:${mediaType};base64,${content}`;
@@ -30,8 +24,117 @@ function downloadBase64(name: string, mediaType: string, content: string) {
   link.click();
 }
 
-function App() {
-  return <QueryClientProvider client={client}><RadarApp /></QueryClientProvider>;
+export function App() {
+  return <QueryClientProvider client={client}><AuthGate /></QueryClientProvider>;
+}
+
+function AuthGate() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(frontendConfig.authEnabled);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!supabase) {
+      setLoading(false);
+      return undefined;
+    }
+    let active = true;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) setAuthError(error.message);
+      setSession(data.session);
+      setLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthError(null);
+      if (!nextSession) client.clear();
+    });
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  if (frontendConfig.authConfigError) {
+    return <ConfigError message={frontendConfig.authConfigError} />;
+  }
+  if (loading) {
+    return <LoadingScreen />;
+  }
+  if (supabase && !session) {
+    return <AuthScreen initialError={authError} />;
+  }
+  return <RadarApp session={session} />;
+}
+
+function LoadingScreen() {
+  return (
+    <main className="auth-shell">
+      <div className="auth-panel status-panel">
+        <ReqRadarWordmark />
+        <p>Checking your session...</p>
+      </div>
+    </main>
+  );
+}
+
+function ConfigError({ message }: { message: string }) {
+  return (
+    <main className="auth-shell">
+      <div className="auth-panel status-panel">
+        <ReqRadarWordmark />
+        <p role="alert" className="form-error">{message}</p>
+      </div>
+    </main>
+  );
+}
+
+function AuthScreen({ initialError }: { initialError: string | null }) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
+  const [pending, setPending] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!supabase) return;
+    setPending(true);
+    setError(null);
+    setMessage(null);
+    const result = mode === "login"
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({ email, password });
+    setPending(false);
+    if (result.error) {
+      setError(result.error.message);
+      return;
+    }
+    if (mode === "signup" && !result.data.session) {
+      setMessage("Check your email to confirm your account before signing in.");
+    }
+  };
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel">
+        <ReqRadarWordmark />
+        <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(null); setMessage(null); }}>Log in</button>
+          <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setError(null); setMessage(null); }}>Create account</button>
+        </div>
+        <form className="auth-form" onSubmit={submit}>
+          <label>Email<input aria-label="Email" className="field" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+          <label>Password<input aria-label="Password" className="field" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} /></label>
+          {error ? <p className="form-error" role="alert">{error}</p> : null}
+          {message ? <p className="form-success" role="status">{message}</p> : null}
+          <button className="btn" type="submit" disabled={pending}>{pending ? "Working..." : mode === "login" ? "Log in" : "Create account"}</button>
+        </form>
+      </section>
+    </main>
+  );
 }
 
 function useThemePreference() {
@@ -91,18 +194,24 @@ function ThemeToggle({ theme, setTheme }: { theme: ThemePreference; setTheme: (t
   );
 }
 
-function RadarApp() {
+function RadarApp({ session }: { session: Session | null }) {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const { theme, setTheme } = useThemePreference();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => request<Project[]>("/projects") });
   const active = projects.data?.find((p) => p.id === activeProjectId) || projects.data?.[0];
+  const signOut = async () => {
+    client.clear();
+    await supabase?.auth.signOut();
+  };
   return (
     <main className="app-shell">
       <header className="app-header">
         <ReqRadarWordmark />
         <div className="header-actions">
-          <span className="dev-pill"><ShieldCheck size={16} /> Dev</span>
+          {!supabase && frontendConfig.isDevelopment ? <span className="dev-pill"><ShieldCheck size={16} /> Dev</span> : null}
+          {session ? <span className="user-pill" title={session.user.email || session.user.id}>{session.user.email || "Signed in"}</span> : null}
           <ThemeToggle theme={theme} setTheme={setTheme} />
+          {supabase ? <button className="small-btn" type="button" onClick={signOut}><LogOut size={15} /> Sign out</button> : null}
         </div>
       </header>
       <section className="app-layout">
@@ -261,4 +370,7 @@ function ImpactReview({ findings }: { findings: Finding[] }) {
   return <div className="finding-stack">{findings.map((finding, index) => <div data-testid="impact-finding" className="finding" key={finding.id}><div className="finding-head"><strong>{finding.impacted_requirement_external_id}</strong><span className={`badge ${finding.severity.toLowerCase()}`}>{finding.severity}</span></div><p>{finding.reason}</p><div className="finding-meta"><span>Confidence {(finding.confidence * 100).toFixed(0)}%</span><span>{finding.detection_method}</span></div><div className="finding-actions"><button data-testid={index === 0 ? "confirm-finding" : undefined} className="small-btn" onClick={() => review.mutate({ id: finding.id, payload: { review_status: "CONFIRMED" } })}>Confirm</button><button data-testid={index === 1 ? "dismiss-finding" : undefined} className="small-btn" onClick={() => review.mutate({ id: finding.id, payload: { review_status: "DISMISSED" } })}>Dismiss</button><select data-testid={index === 0 ? "severity-override" : undefined} className="small-btn" value={finding.severity} onChange={(e) => review.mutate({ id: finding.id, payload: { severity: e.target.value } })}><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select><input data-testid={index === 0 ? "reviewer-note" : undefined} className="field note-field" placeholder="Reviewer note" value={notes[finding.id] ?? finding.reviewer_note ?? ""} onChange={(e) => setNotes({ ...notes, [finding.id]: e.target.value })} /><button data-testid={index === 0 ? "save-note" : undefined} className="small-btn" onClick={(e) => { const input = e.currentTarget.parentElement?.querySelector(".note-field"); const reviewerNote = input instanceof globalThis.HTMLInputElement ? input.value : ""; review.mutate({ id: finding.id, payload: { reviewer_note: reviewerNote } }); }}>Save note</button><span>{finding.review_status}</span></div></div>)}</div>;
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
+const root = document.getElementById("root");
+if (root) {
+  ReactDOM.createRoot(root).render(<App />);
+}
