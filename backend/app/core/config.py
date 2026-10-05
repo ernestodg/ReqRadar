@@ -1,4 +1,6 @@
 from functools import lru_cache
+from urllib.parse import urlparse
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,7 +18,6 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     supabase_url: str = ""
     supabase_anon_key: str = ""
-    supabase_jwt_secret: str = ""
     posthog_api_key: str = ""
     posthog_host: str = "https://app.posthog.com"
     billing_enabled: bool = False
@@ -29,6 +30,15 @@ class Settings(BaseSettings):
     def validate_runtime(self) -> None:
         if self.app_env == "production" and self.dev_auth_bypass:
             raise RuntimeError("DEV_AUTH_BYPASS cannot be enabled in production.")
+        if self.app_env == "production":
+            validate_supabase_url(self.supabase_url)
+
+
+def validate_supabase_url(value: str) -> str:
+    parsed = urlparse(value.rstrip("/"))
+    if parsed.scheme != "https" or not parsed.netloc or parsed.path:
+        raise RuntimeError("SUPABASE_URL must be a valid HTTPS project URL.")
+    return value.rstrip("/")
 
 
 @lru_cache

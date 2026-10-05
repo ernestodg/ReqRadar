@@ -2,7 +2,6 @@ import hmac
 from hashlib import sha256
 
 import pytest
-from jose import jwt
 
 from app.core.config import Settings
 from app.integrations.ai import ImpactAIResult, NullAIProvider, provider_from_settings
@@ -27,8 +26,3 @@ def test_billing_webhook_signature_verification():
     billing = BillingService(secret)
     assert billing.verify_webhook(body, signature)
     assert not billing.verify_webhook(body, "bad")
-
-
-def test_supabase_compatible_jwt_can_be_created_for_auth_path():
-    token = jwt.encode({"sub": "user-1", "aud": "authenticated"}, "secret", algorithm="HS256")
-    assert isinstance(token, str)
