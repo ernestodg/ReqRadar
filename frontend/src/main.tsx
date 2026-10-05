@@ -356,11 +356,29 @@ function ComparisonResults({ projectId, data }: { projectId: string; data: { com
 }
 
 function ExportButtons({ projectId, comparisonId }: { projectId: string; comparisonId: string }) {
-  const exportReport = async (format: "csv" | "pdf") => {
-    const result = await request<{ filename: string; media_type: string; content_base64: string }>(`/projects/${projectId}/comparisons/${comparisonId}/export.${format}`);
+  const exportReport = async (format: "csv" | "pdf", reportType?: "executive" | "audit") => {
+    const query = reportType ? `?type=${reportType}` : "";
+    const result = await request<{ filename: string; media_type: string; content_base64: string }>(`/projects/${projectId}/comparisons/${comparisonId}/export.${format}${query}`);
     downloadBase64(result.filename, result.media_type, result.content_base64);
   };
-  return <div className="export-actions"><button data-testid="export-csv" className="export-btn" title="Export CSV" onClick={() => exportReport("csv")}><Download size={15} /><span>CSV</span></button><button data-testid="export-pdf" className="export-btn" title="Export PDF" onClick={() => exportReport("pdf")}><Download size={15} /><span>PDF</span></button></div>;
+  return (
+    <div className="export-actions">
+      <button data-testid="export-csv" className="export-btn" title="Export CSV" onClick={() => exportReport("csv")}><Download size={15} /><span>CSV</span></button>
+      <details className="export-menu">
+        <summary data-testid="export-report" className="export-btn"><Download size={15} /><span>Export Report</span></summary>
+        <div className="export-menu-panel">
+          <button data-testid="export-executive-pdf" type="button" onClick={() => exportReport("pdf", "executive")}>
+            <strong>Executive Report</strong>
+            <span>Concise stakeholder report focused on key changes, high-impact findings, and review status.</span>
+          </button>
+          <button data-testid="export-audit-pdf" type="button" onClick={() => exportReport("pdf", "audit")}>
+            <strong>Full Audit Report</strong>
+            <span>Complete comparison record containing every impact finding and its supporting evidence.</span>
+          </button>
+        </div>
+      </details>
+    </div>
+  );
 }
 
 function ImpactReview({ findings }: { findings: Finding[] }) {

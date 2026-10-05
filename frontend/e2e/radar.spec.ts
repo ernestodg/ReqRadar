@@ -47,6 +47,7 @@ test("complete ReqRadar MVP workflow", async ({ page }) => {
   await page.getByTestId("export-csv").click();
   expect((await downloadCsv).suggestedFilename()).toContain(".csv");
   const downloadPdf = page.waitForEvent("download");
-  await page.getByTestId("export-pdf").click();
-  expect((await downloadPdf).suggestedFilename()).toContain(".pdf");
+  await page.getByTestId("export-report").click();
+  await page.getByTestId("export-audit-pdf").click();
+  expect((await downloadPdf).suggestedFilename()).toContain("full-audit-report.pdf");
 });

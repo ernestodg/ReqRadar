@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.core.db import SessionLocal
 from app.models import ChangeType, Comparison, ImpactFinding, ImportBatch, RequirementChange, ReviewStatus, Severity
+from app.services.report_metrics import calculate_report_stats, report_summary_json
 from tests.conftest import sample_mapping
 
 
@@ -67,6 +68,19 @@ def pdf_text(export: dict) -> str:
     return "\n".join(decoded) + "\n" + raw
 
 
+def pdf_page_count(export: dict) -> int:
+    return len(re.findall(rb"/Type\s*/Page\b", pdf_bytes(export)))
+
+
+def canonical_summary(comparison_id: str) -> dict[str, int]:
+    with SessionLocal() as db:
+        comparison = db.get(Comparison, uuid.UUID(comparison_id))
+        assert comparison is not None
+        changes = db.query(RequirementChange).filter_by(comparison_id=comparison.id).all()
+        findings = db.query(ImpactFinding).join(RequirementChange).filter(RequirementChange.comparison_id == comparison.id).all()
+        return report_summary_json(calculate_report_stats(comparison, changes, findings))
+
+
 def test_api_workflow_counts_review_history_and_exports(client, user_headers):
     project, comparison = prepared_comparison(client, user_headers)
     assert comparison["summary_json"]["ADDED"] == 2
@@ -87,26 +101,38 @@ def test_api_workflow_counts_review_history_and_exports(client, user_headers):
     history = client.get(f"/projects/{project['id']}", headers=user_headers).json()
     assert history["comparisons"][0]["id"] == comparison["id"]
     csv_export = client.get(f"/projects/{project['id']}/comparisons/{comparison['id']}/export.csv", headers=user_headers).json()
-    pdf_export = client.get(f"/projects/{project['id']}/comparisons/{comparison['id']}/export.pdf", headers=user_headers).json()
+    audit_export = client.get(f"/projects/{project['id']}/comparisons/{comparison['id']}/export.pdf?type=audit", headers=user_headers).json()
+    executive_export = client.get(f"/projects/{project['id']}/comparisons/{comparison['id']}/export.pdf?type=executive", headers=user_headers).json()
+    invalid_export = client.get(f"/projects/{project['id']}/comparisons/{comparison['id']}/export.pdf?type=summary", headers=user_headers)
     assert csv_export["media_type"] == "text/csv"
-    assert pdf_export["media_type"] == "application/pdf"
+    assert audit_export["media_type"] == "application/pdf"
+    assert executive_export["media_type"] == "application/pdf"
+    assert invalid_export.status_code == 422
+    assert audit_export["filename"] == "radar-comparison-full-audit-report.pdf"
+    assert executive_export["filename"] == "radar-comparison-executive-report.pdf"
     assert len(base64.b64decode(csv_export["content_base64"])) > 100
-    text = pdf_text(pdf_export)
-    assert "ReqRadar" in text
-    assert "Requirements Impact Analysis" in text
-    assert "Project" in text
-    assert "MODIFIED" in text
-    assert "16" in text
-    assert "POTENTIAL IMPACTS" in text
-    assert "High Impact Findings" in text
-    assert "Medium Impact Findings" in text
-    assert "Low Impact Findings" in text
-    assert "CONFIRMED" in text
-    assert "DISMISSED" in text
-    assert "UNREVIEWED" in text
-    assert "Reviewed" in text
-    assert "Methodology" in text
-    assert "Page 1 /" in text
+    audit_text = pdf_text(audit_export)
+    executive_text = pdf_text(executive_export)
+    for text in [audit_text, executive_text]:
+        assert "ReqRadar" in text
+        assert "Requirements Impact Analysis" in text
+        assert "Project" in text
+        assert "MODIFIED" in text
+        assert "16" in text
+        assert "POTENTIAL IMPACTS" in text
+        assert "CONFIRMED" in text
+        assert "DISMISSED" in text
+        assert "UNREVIEWED" in text
+        assert "Methodology" in text
+        assert "Page 1 /" in text
+    assert "Full Audit Report" in audit_text
+    assert "Executive Report" in executive_text
+    assert "High Impact Findings" in audit_text
+    assert "Medium Impact Findings" in audit_text
+    assert "Low Impact Findings" in audit_text
+    assert "Medium Impact Summary" in executive_text
+    assert "Report Note" in executive_text
+    assert canonical_summary(comparison["id"]) == client.get(f"/projects/{project['id']}/comparisons/{comparison['id']}", headers=user_headers).json()["comparison"]["summary_json"]
 
 
 def test_upload_validation_and_plan_limits(client, user_headers):
@@ -147,16 +173,17 @@ def create_empty_comparison(project_id: str) -> str:
 def test_pdf_report_handles_zero_findings(client, user_headers):
     project = create_project(client, user_headers, name="Zero Finding Report")
     comparison_id = create_empty_comparison(project["id"])
-    export = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}/export.pdf", headers=user_headers).json()
+    export = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}/export.pdf?type=executive", headers=user_headers).json()
     text = pdf_text(export)
     assert "Zero Finding Report" in text
+    assert "Executive Report" in text
     assert "POTENTIAL IMPACTS" in text
     assert "0" in text
     assert "Methodology" in text
-    assert "High Impact Findings" not in text
+    assert "No high-impact findings were identified" in text
 
 
-def create_large_low_only_report(project_id: str, count: int = 80) -> str:
+def create_large_low_only_report(project_id: str, count: int = 80, reviewer_notes: bool = True) -> str:
     with SessionLocal() as db:
         project_uuid = uuid.UUID(project_id)
         baseline = ImportBatch(project_id=project_uuid, filename="large-v1.csv", version_label="V1", row_count=count, source_hash="large-baseline", mapping_json={}, status="COMPLETE")
@@ -175,7 +202,7 @@ def create_large_low_only_report(project_id: str, count: int = 80) -> str:
             changes.append(change)
         db.flush()
         for index, change in enumerate(changes):
-            findings.append(ImpactFinding(requirement_change_id=change.id, impacted_requirement_external_id=f"AC-LONG-{index:03d}", severity=Severity.LOW, confidence=0.51, impact_score=51, detection_method="long_text_test", reason=long_reason, relationship_type="text_similarity", review_status=ReviewStatus.UNREVIEWED, reviewer_note="Long reviewer note " + ("with extra context " * 12)))
+            findings.append(ImpactFinding(requirement_change_id=change.id, impacted_requirement_external_id=f"AC-LONG-{index:03d}", severity=Severity.LOW, confidence=0.51, impact_score=51, detection_method="long_text_test", reason=long_reason, relationship_type="text_similarity", review_status=ReviewStatus.UNREVIEWED, reviewer_note="Long reviewer note " + ("with extra context " * 12) if reviewer_notes else None))
         db.add_all(findings)
         db.commit()
         return str(comparison.id)
@@ -184,12 +211,28 @@ def create_large_low_only_report(project_id: str, count: int = 80) -> str:
 def test_pdf_report_handles_single_severity_long_text_and_large_findings(client, user_headers):
     project = create_project(client, user_headers, name="Large Low Report")
     comparison_id = create_large_low_only_report(project["id"])
-    export = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}/export.pdf", headers=user_headers).json()
-    content = pdf_bytes(export)
-    text = content.decode("latin-1", errors="ignore")
-    assert "Large Low Report" in text
-    assert "Low Impact Findings" in text
-    assert "High Impact Findings" not in text
-    assert "REQ-LONG-000" in text
-    assert "AC-LONG-079" in text
+    audit_export = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}/export.pdf?type=audit", headers=user_headers).json()
+    executive_export = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}/export.pdf?type=executive", headers=user_headers).json()
+    content = pdf_bytes(audit_export)
+    audit_text = content.decode("latin-1", errors="ignore")
+    executive_text = pdf_text(executive_export)
+    assert "Large Low Report" in audit_text
+    assert "Low Impact Findings" in audit_text
+    assert "High Impact Findings" not in audit_text
+    assert "REQ-LONG-000" in audit_text
+    assert "AC-LONG-079" in audit_text
+    assert "No high-impact findings were identified" in executive_text
+    assert "Low Impact Findings" not in executive_text
     assert len(content) > 20_000
+
+
+def test_audit_report_contains_more_complete_finding_evidence_than_executive(client, user_headers):
+    project = create_project(client, user_headers, name="Report Scope")
+    comparison_id = create_large_low_only_report(project["id"], count=30, reviewer_notes=False)
+    audit_export = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}/export.pdf?type=audit", headers=user_headers).json()
+    executive_export = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}/export.pdf?type=executive", headers=user_headers).json()
+    audit_text = pdf_text(audit_export)
+    executive_text = pdf_text(executive_export)
+    assert "AC-LONG-029" in audit_text
+    assert "AC-LONG-029" not in executive_text
+    assert pdf_page_count(executive_export) <= pdf_page_count(audit_export)

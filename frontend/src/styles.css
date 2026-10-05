@@ -411,6 +411,35 @@ button { color: inherit; }
   font-weight: 750;
 }
 .export-btn:hover { border-color: var(--line-strong); background: var(--surface-muted); }
+.export-menu { position: relative; }
+.export-menu summary { list-style: none; cursor: pointer; }
+.export-menu summary::-webkit-details-marker { display: none; }
+.export-menu-panel {
+  position: absolute;
+  right: 0;
+  z-index: 20;
+  width: min(22rem, calc(100vw - 2rem));
+  margin-top: 0.4rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.export-menu-panel button {
+  display: grid;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.65rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.export-menu-panel button:hover { background: var(--surface-muted); }
+.export-menu-panel strong { font-size: 0.82rem; }
+.export-menu-panel span { color: var(--muted); font-size: 0.72rem; line-height: 1.25; }
 .impact-title { margin-top: 1rem; }
 
 .badge {

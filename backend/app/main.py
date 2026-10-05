@@ -15,7 +15,8 @@ from app.models import ChangeType, Comparison, ImpactFinding, ImportBatch, Proje
 from app.schemas.api import ComparisonCreate, ExportOut, FindingReview, ImportRequest, ImportOut, ProjectCreate, ProjectOut, UserContext
 from app.services.compare import build_comparison
 from app.services.csv_import import normalize_rows, parse_csv, source_hash, suggest_mapping, validate_rows
-from app.services.pdf_report import build_requirements_impact_pdf
+from app.services.pdf_report import ReportType, build_requirements_impact_pdf
+from app.services.report_metrics import calculate_report_stats, report_summary_json
 from app.integrations.billing import BillingService
 
 settings = get_settings()
@@ -56,8 +57,8 @@ def import_out(batch: ImportBatch) -> dict:
     return {"id": str(batch.id), "filename": batch.filename, "version_label": batch.version_label, "row_count": batch.row_count, "status": batch.status}
 
 
-def comparison_out(comparison: Comparison) -> dict:
-    return {"id": str(comparison.id), "project_id": str(comparison.project_id), "baseline_import_id": str(comparison.baseline_import_id), "comparison_import_id": str(comparison.comparison_import_id), "status": comparison.status, "summary_json": comparison.summary_json or {}, "created_at": comparison.created_at.isoformat() if comparison.created_at else None}
+def comparison_out(comparison: Comparison, summary_json: dict | None = None) -> dict:
+    return {"id": str(comparison.id), "project_id": str(comparison.project_id), "baseline_import_id": str(comparison.baseline_import_id), "comparison_import_id": str(comparison.comparison_import_id), "status": comparison.status, "summary_json": summary_json or comparison.summary_json or {}, "created_at": comparison.created_at.isoformat() if comparison.created_at else None}
 
 
 def change_out(change: RequirementChange) -> dict:
@@ -170,7 +171,8 @@ def get_comparison(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session 
         raise HTTPException(status_code=404, detail={"message": "Comparison was not found."})
     changes = db.scalars(select(RequirementChange).where(RequirementChange.comparison_id == comparison.id).order_by(RequirementChange.external_id)).all()
     findings = db.scalars(select(ImpactFinding).join(RequirementChange).where(RequirementChange.comparison_id == comparison.id)).all()
-    return {"comparison": comparison_out(comparison), "changes": [change_out(item) for item in changes], "findings": [finding_out(item) for item in findings]}
+    stats = calculate_report_stats(comparison, changes, findings)
+    return {"comparison": comparison_out(comparison, report_summary_json(stats)), "changes": [change_out(item) for item in changes], "findings": [finding_out(item) for item in findings]}
 
 
 @app.patch("/findings/{finding_id}")
@@ -210,7 +212,7 @@ def export_csv(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session = De
 
 
 @app.get("/projects/{project_id}/comparisons/{comparison_id}/export.pdf", response_model=ExportOut)
-def export_pdf(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session = Depends(get_db), user: UserContext = Depends(get_current_user)):
+def export_pdf(project_id: uuid.UUID, comparison_id: uuid.UUID, type: ReportType = ReportType.AUDIT, db: Session = Depends(get_db), user: UserContext = Depends(get_current_user)):
     project = scoped_project(db, project_id, user)
     comparison = db.scalar(select(Comparison).where(Comparison.id == comparison_id, Comparison.project_id == project_id))
     if comparison is None:
@@ -218,8 +220,9 @@ def export_pdf(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session = De
     imports = db.scalars(select(ImportBatch).where(ImportBatch.project_id == project.id).order_by(ImportBatch.imported_at)).all()
     changes = db.scalars(select(RequirementChange).where(RequirementChange.comparison_id == comparison_id).order_by(RequirementChange.external_id)).all()
     findings = db.scalars(select(ImpactFinding).join(RequirementChange).where(RequirementChange.comparison_id == comparison_id).order_by(ImpactFinding.severity, RequirementChange.external_id, ImpactFinding.impacted_requirement_external_id)).all()
-    pdf_bytes = build_requirements_impact_pdf(project, comparison, imports, changes, findings)
-    return ExportOut(filename="radar-comparison.pdf", content_base64=base64.b64encode(pdf_bytes).decode(), media_type="application/pdf")
+    pdf_bytes = build_requirements_impact_pdf(project, comparison, imports, changes, findings, report_type=type)
+    filename = "radar-comparison-executive-report.pdf" if type == ReportType.EXECUTIVE else "radar-comparison-full-audit-report.pdf"
+    return ExportOut(filename=filename, content_base64=base64.b64encode(pdf_bytes).decode(), media_type="application/pdf")
 
 
 @app.post("/billing/webhook")

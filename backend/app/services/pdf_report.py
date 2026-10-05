@@ -1,7 +1,7 @@
 import io
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -13,6 +13,7 @@ from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Flowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.models import ChangeType, Comparison, ImpactFinding, ImportBatch, Project, RequirementChange, ReviewStatus, Severity
+from app.services.report_metrics import ReportStats, calculate_report_stats
 
 
 BLUE = colors.HexColor("#2563eb")
@@ -28,6 +29,11 @@ GREEN = colors.HexColor("#16a34a")
 SEVERITY_ORDER = [Severity.HIGH, Severity.MEDIUM, Severity.LOW]
 REVIEW_ORDER = [ReviewStatus.CONFIRMED, ReviewStatus.DISMISSED, ReviewStatus.UNREVIEWED]
 rl_config.useA85 = 0
+
+
+class ReportType(StrEnum):
+    EXECUTIVE = "executive"
+    AUDIT = "audit"
 
 
 def draw_radar_logo(canvas: Canvas, x: float, y: float, size: float) -> None:
@@ -88,30 +94,12 @@ class RadarLogoFlowable(Flowable):
         draw_radar_logo(self.canv, 0, 0, self.size)
 
 
-@dataclass(frozen=True)
-class ReportStats:
-    modified: int
-    added: int
-    removed: int
-    unchanged: int
-    total_findings: int
-    severity_counts: Counter
-    review_counts: Counter
-
-    @property
-    def changed_total(self) -> int:
-        return self.modified + self.added + self.removed
-
-    @property
-    def reviewed_total(self) -> int:
-        return self.review_counts[ReviewStatus.CONFIRMED] + self.review_counts[ReviewStatus.DISMISSED]
-
-
 class ReportCanvas(Canvas):
-    def __init__(self, *args, project_name: str, generated_at: datetime, **kwargs):
+    def __init__(self, *args, project_name: str, generated_at: datetime, report_label: str, **kwargs):
         super().__init__(*args, **kwargs)
         self.project_name = project_name
         self.generated_at = generated_at
+        self.report_label = report_label
         self._saved_page_states = []
 
     def showPage(self):
@@ -138,7 +126,7 @@ class ReportCanvas(Canvas):
         draw_radar_logo(self, logo_x, logo_y, logo_size)
         self.setFillColor(NAVY)
         self.setFont("Helvetica-Bold", 8.5)
-        self.drawString(logo_x + logo_size + 0.08 * inch, height - 0.38 * inch, "ReqRadar | Requirements Impact Analysis")
+        self.drawString(logo_x + logo_size + 0.08 * inch, height - 0.38 * inch, f"ReqRadar | {self.report_label}")
         self.setFont("Helvetica", 8)
         self.setFillColor(MUTED)
         self.drawRightString(width - 0.6 * inch, height - 0.38 * inch, self.project_name[:70])
@@ -148,10 +136,11 @@ class ReportCanvas(Canvas):
         self.restoreState()
 
 
-def build_requirements_impact_pdf(project: Project, comparison: Comparison, imports: list[ImportBatch], changes: list[RequirementChange], findings: list[ImpactFinding]) -> bytes:
+def build_requirements_impact_pdf(project: Project, comparison: Comparison, imports: list[ImportBatch], changes: list[RequirementChange], findings: list[ImpactFinding], report_type: ReportType = ReportType.AUDIT) -> bytes:
     generated_at = datetime.now(UTC)
-    stats = calculate_stats(comparison, findings)
+    stats = calculate_report_stats(comparison, changes, findings)
     buffer = io.BytesIO()
+    report_label = "Executive Report" if report_type == ReportType.EXECUTIVE else "Full Audit Report"
     doc = SimpleDocTemplate(
         buffer,
         pagesize=letter,
@@ -159,7 +148,7 @@ def build_requirements_impact_pdf(project: Project, comparison: Comparison, impo
         rightMargin=0.6 * inch,
         topMargin=0.78 * inch,
         bottomMargin=0.72 * inch,
-        title=f"ReqRadar Requirements Impact Analysis - {project.name}",
+        title=f"ReqRadar Requirements Impact Analysis {report_label} - {project.name}",
         author="ReqRadar",
         subject="Requirements Impact Analysis",
         pageCompression=0,
@@ -167,18 +156,12 @@ def build_requirements_impact_pdf(project: Project, comparison: Comparison, impo
     styles = report_styles()
     story: list = []
     baseline, target = comparison_versions(comparison, imports)
-    story.extend(executive_summary(project, comparison, baseline, target, generated_at, stats, changes, findings, styles))
-    story.extend(change_overview(changes, findings, styles))
-    for severity in SEVERITY_ORDER:
-        section = severity_section(severity, findings, styles)
-        if section:
-            story.extend(section)
-    review_section = reviewed_findings(findings, styles)
-    if review_section:
-        story.extend(review_section)
-    story.extend(methodology_section(baseline, target, styles))
+    if report_type == ReportType.EXECUTIVE:
+        story.extend(executive_report_story(project, comparison, baseline, target, generated_at, stats, changes, findings, styles))
+    else:
+        story.extend(audit_report_story(project, comparison, baseline, target, generated_at, stats, changes, findings, styles))
 
-    doc.build(story, canvasmaker=lambda *args, **kwargs: ReportCanvas(*args, project_name=project.name, generated_at=generated_at, **kwargs))
+    doc.build(story, canvasmaker=lambda *args, **kwargs: ReportCanvas(*args, project_name=project.name, generated_at=generated_at, report_label=report_label, **kwargs))
     return buffer.getvalue()
 
 
@@ -199,21 +182,6 @@ def report_styles() -> dict[str, ParagraphStyle]:
     }
 
 
-def calculate_stats(comparison: Comparison, findings: list[ImpactFinding]) -> ReportStats:
-    summary = comparison.summary_json or {}
-    severity_counts = Counter(finding.severity for finding in findings)
-    review_counts = Counter(finding.review_status for finding in findings)
-    return ReportStats(
-        modified=int(summary.get(ChangeType.MODIFIED.value, summary.get("MODIFIED", 0)) or 0),
-        added=int(summary.get(ChangeType.ADDED.value, summary.get("ADDED", 0)) or 0),
-        removed=int(summary.get(ChangeType.REMOVED.value, summary.get("REMOVED", 0)) or 0),
-        unchanged=int(summary.get(ChangeType.UNCHANGED.value, summary.get("UNCHANGED", 0)) or 0),
-        total_findings=len(findings),
-        severity_counts=severity_counts,
-        review_counts=review_counts,
-    )
-
-
 def comparison_versions(comparison: Comparison, imports: list[ImportBatch]) -> tuple[str, str]:
     by_id = {item.id: item for item in imports}
     baseline = by_id.get(comparison.baseline_import_id)
@@ -229,10 +197,35 @@ def format_import_label(batch: ImportBatch | None) -> str:
     return batch.version_label
 
 
-def executive_summary(project: Project, comparison: Comparison, baseline: str, target: str, generated_at: datetime, stats: ReportStats, changes: list[RequirementChange], findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
+def executive_report_story(project: Project, comparison: Comparison, baseline: str, target: str, generated_at: datetime, stats: ReportStats, changes: list[RequirementChange], findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
+    story = executive_summary(project, comparison, baseline, target, generated_at, stats, changes, findings, styles, "Executive Report")
+    story.extend(high_impact_findings(findings, styles))
+    story.extend(reviewed_findings(findings, styles, compact=True))
+    story.extend(medium_impact_summary(changes, findings, styles))
+    story.extend(outstanding_work(stats, changes, findings, styles))
+    story.extend(report_note(styles))
+    return story
+
+
+def audit_report_story(project: Project, comparison: Comparison, baseline: str, target: str, generated_at: datetime, stats: ReportStats, changes: list[RequirementChange], findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
+    story = executive_summary(project, comparison, baseline, target, generated_at, stats, changes, findings, styles, "Full Audit Report")
+    story.extend(change_overview(changes, findings, styles))
+    for severity in SEVERITY_ORDER:
+        section = severity_section(severity, findings, styles)
+        if section:
+            story.extend(section)
+    review_section = reviewed_findings(findings, styles)
+    if review_section:
+        story.extend(review_section)
+    story.extend(methodology_section(baseline, target, styles, report_type=ReportType.AUDIT))
+    return story
+
+
+def executive_summary(project: Project, comparison: Comparison, baseline: str, target: str, generated_at: datetime, stats: ReportStats, changes: list[RequirementChange], findings: list[ImpactFinding], styles: dict[str, ParagraphStyle], report_label: str) -> list:
     elements = [
         brand_title(styles),
         Paragraph("Requirements Impact Analysis", styles["subtitle"]),
+        Paragraph(report_label, styles["section"]),
         meta_table(
             [
                 ("Project", project.name),
@@ -241,7 +234,7 @@ def executive_summary(project: Project, comparison: Comparison, baseline: str, t
             ],
             styles,
         ),
-        Paragraph("Executive Summary", styles["section"]),
+        Paragraph("Summary", styles["section"]),
         Paragraph(executive_assessment(stats), styles["body"]),
         Spacer(1, 8),
         kpi_grid(
@@ -331,25 +324,31 @@ def review_progress(stats: ReportStats, styles: dict[str, ParagraphStyle]) -> Ta
     return table
 
 
-def highest_impact_requirements(changes: list[RequirementChange], findings: list[ImpactFinding], limit: int = 6) -> list[tuple[str, int, int]]:
+def highest_impact_requirements(changes: list[RequirementChange], findings: list[ImpactFinding], limit: int = 10) -> list[tuple[str, str, int, int, int, str]]:
     by_change = {change.id: change.external_id for change in changes}
+    types = {change.external_id: change.change_type.value for change in changes}
     totals: dict[str, int] = defaultdict(int)
     highs: dict[str, int] = defaultdict(int)
+    mediums: dict[str, int] = defaultdict(int)
+    related_by_req: dict[str, list[ImpactFinding]] = defaultdict(list)
     for finding in findings:
         external_id = by_change.get(finding.requirement_change_id)
         if not external_id:
             continue
+        related_by_req[external_id].append(finding)
         totals[external_id] += 1
         if finding.severity == Severity.HIGH:
             highs[external_id] += 1
-    ranked = sorted(((req, totals[req], highs[req]) for req in totals), key=lambda item: (-item[2], -item[1], item[0]))
+        if finding.severity == Severity.MEDIUM:
+            mediums[external_id] += 1
+    ranked = sorted(((req, types.get(req, ""), totals[req], highs[req], mediums[req], review_summary(related_by_req[req])) for req in totals), key=lambda item: (-item[3], -item[2], item[0]))
     return ranked[:limit]
 
 
-def highest_impact_table(rows: list[tuple[str, int, int]], styles: dict[str, ParagraphStyle]) -> Table:
-    data = [[Paragraph("Requirement", styles["table_header"]), Paragraph("Findings", styles["table_header"]), Paragraph("High", styles["table_header"])]]
-    data.extend([[table_cell(req, styles), table_cell(count, styles), table_cell(high, styles)] for req, count, high in rows])
-    return styled_table(data, [4.8 * inch, 1 * inch, 1 * inch])
+def highest_impact_table(rows: list[tuple[str, str, int, int, int, str]], styles: dict[str, ParagraphStyle]) -> Table:
+    data = [[Paragraph("Requirement ID", styles["table_header"]), Paragraph("Change Type", styles["table_header"]), Paragraph("Total Findings", styles["table_header"]), Paragraph("High", styles["table_header"]), Paragraph("Medium", styles["table_header"]), Paragraph("Review Status", styles["table_header"])]]
+    data.extend([[table_cell(req, styles), table_cell(change_type, styles), table_cell(count, styles), table_cell(high, styles), table_cell(medium, styles), table_cell(status, styles)] for req, change_type, count, high, medium, status in rows])
+    return styled_table(data, [1.2 * inch, 0.9 * inch, 0.85 * inch, 0.55 * inch, 0.65 * inch, 2.65 * inch])
 
 
 def change_overview(changes: list[RequirementChange], findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
@@ -389,13 +388,27 @@ def table_cell(value: object, styles: dict[str, ParagraphStyle]) -> Paragraph:
 
 
 def severity_section(severity: Severity, findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
-    section_findings = sorted((finding for finding in findings if finding.severity == severity), key=lambda item: (review_sort(item.review_status), item.change.external_id, item.impacted_requirement_external_id))
+    section_findings = sort_findings(finding for finding in findings if finding.severity == severity)
     if not section_findings:
         return []
     elements = [Paragraph(f"{severity.value.title()} Impact Findings", styles["section"])]
     for finding in section_findings:
         elements.append(finding_block(finding, styles))
     return elements
+
+
+def high_impact_findings(findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
+    high_findings = sort_findings(finding for finding in findings if finding.severity == Severity.HIGH)
+    if not high_findings:
+        return [Paragraph("High Impact Findings", styles["section"]), Paragraph("No high-impact findings were identified.", styles["body"])]
+    elements = [Paragraph("High Impact Findings", styles["section"])]
+    for finding in high_findings:
+        elements.append(compact_finding_block(finding, styles))
+    return elements
+
+
+def sort_findings(findings) -> list[ImpactFinding]:
+    return sorted(findings, key=lambda item: (SEVERITY_ORDER.index(item.severity), -item.confidence, item.change.external_id, item.impacted_requirement_external_id))
 
 
 def review_sort(status: ReviewStatus) -> int:
@@ -428,6 +441,26 @@ def finding_block(finding: ImpactFinding, styles: dict[str, ParagraphStyle]) -> 
     return KeepTogether([table, Spacer(1, 6)])
 
 
+def compact_finding_block(finding: ImpactFinding, styles: dict[str, ParagraphStyle]) -> KeepTogether:
+    status_color = review_color(finding.review_status)
+    rows = [
+        [
+            Paragraph(f"<b>{escape(finding.change.external_id)}</b> \u2192 <b>{escape(finding.impacted_requirement_external_id)}</b>", styles["finding_title"]),
+            badge(finding.review_status.value, status_color),
+        ],
+        [Paragraph(f"{finding.confidence * 100:.0f}% confidence · {humanize_detection(finding.detection_method)} · {escape(finding.relationship_type)}", styles["small"]), ""],
+        [Paragraph(escape(finding.reason), styles["finding_body"]), ""],
+    ]
+    if finding.reviewer_note:
+        rows.append([Paragraph(f"<b>Reviewer note:</b> {escape(finding.reviewer_note)}", styles["finding_body"]), ""])
+    table = Table(rows, colWidths=[5.7 * inch, 1.1 * inch])
+    style_commands = [("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.35, LINE), ("LINEBEFORE", (0, 0), (0, -1), 2.5, severity_color(finding.severity)), ("SPAN", (0, 1), (1, 1)), ("SPAN", (0, 2), (1, 2)), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]
+    if finding.reviewer_note:
+        style_commands.append(("SPAN", (0, 3), (1, 3)))
+    table.setStyle(TableStyle(style_commands))
+    return KeepTogether([table, Spacer(1, 4)])
+
+
 def badge(text: str, color: colors.Color) -> Table:
     style = ParagraphStyle("badge", fontName="Helvetica-Bold", fontSize=6.5, leading=8, textColor=colors.white, alignment=TA_CENTER)
     table = Table([[Paragraph(text, style)]], colWidths=[0.95 * inch], rowHeights=[0.18 * inch])
@@ -443,25 +476,94 @@ def review_color(status: ReviewStatus) -> colors.Color:
     return {ReviewStatus.CONFIRMED: GREEN, ReviewStatus.DISMISSED: MUTED, ReviewStatus.UNREVIEWED: MEDIUM}[status]
 
 
-def reviewed_findings(findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
-    reviewed = [finding for finding in findings if finding.review_status != ReviewStatus.UNREVIEWED]
+def reviewed_findings(findings: list[ImpactFinding], styles: dict[str, ParagraphStyle], compact: bool = False) -> list:
+    reviewed = [finding for finding in findings if finding.review_status != ReviewStatus.UNREVIEWED or finding.reviewer_note or finding.manually_adjusted_severity]
+    if compact:
+        reviewed = [finding for finding in reviewed if finding.severity != Severity.HIGH]
     if not reviewed:
         return []
     data = [[Paragraph("Requirement", styles["table_header"]), Paragraph("Impacted", styles["table_header"]), Paragraph("Severity", styles["table_header"]), Paragraph("Review", styles["table_header"]), Paragraph("Reviewer Note", styles["table_header"])]]
-    for finding in sorted(reviewed, key=lambda item: (item.review_status.value, item.change.external_id, item.impacted_requirement_external_id)):
+    for finding in sorted(reviewed, key=reviewed_sort_key):
         data.append([table_cell(finding.change.external_id, styles), table_cell(finding.impacted_requirement_external_id, styles), table_cell(finding.severity.value, styles), table_cell(finding.review_status.value, styles), table_cell(finding.reviewer_note or "", styles)])
     return [Paragraph("Reviewed Findings", styles["section"]), styled_table(data, [1.25 * inch, 1.25 * inch, 0.8 * inch, 0.95 * inch, 2.55 * inch])]
 
 
-def methodology_section(baseline: str, target: str, styles: dict[str, ParagraphStyle]) -> list:
+def reviewed_sort_key(finding: ImpactFinding) -> tuple:
+    priority = 0 if finding.review_status == ReviewStatus.CONFIRMED else 1 if finding.reviewer_note or finding.manually_adjusted_severity else 2
+    return (priority, finding.change.external_id, finding.impacted_requirement_external_id)
+
+
+def medium_impact_summary(changes: list[RequirementChange], findings: list[ImpactFinding], styles: dict[str, ParagraphStyle], limit: int = 20) -> list:
+    by_change = {change.id: change.external_id for change in changes}
+    grouped: dict[str, list[ImpactFinding]] = defaultdict(list)
+    for finding in findings:
+        if finding.severity == Severity.MEDIUM:
+            external_id = by_change.get(finding.requirement_change_id)
+            if external_id:
+                grouped[external_id].append(finding)
+    if not grouped:
+        return [Paragraph("Medium Impact Summary", styles["section"]), Paragraph("No medium-impact findings were identified.", styles["body"])]
+    rows = []
+    for requirement_id, items in grouped.items():
+        counts = defaultdict(int)
+        for item in items:
+            counts[item.review_status] += 1
+        rows.append((requirement_id, len(items), counts[ReviewStatus.UNREVIEWED], counts[ReviewStatus.CONFIRMED], counts[ReviewStatus.DISMISSED]))
+    rows = sorted(rows, key=lambda item: (-item[1], item[0]))
+    data = [[Paragraph("Requirement", styles["table_header"]), Paragraph("Medium Findings", styles["table_header"]), Paragraph("Unreviewed", styles["table_header"]), Paragraph("Confirmed", styles["table_header"]), Paragraph("Dismissed", styles["table_header"])]]
+    data.extend([[table_cell(req, styles), table_cell(medium, styles), table_cell(unreviewed, styles), table_cell(confirmed, styles), table_cell(dismissed, styles)] for req, medium, unreviewed, confirmed, dismissed in rows[:limit]])
+    elements = [Paragraph("Medium Impact Summary", styles["section"]), styled_table(data, [2 * inch, 1.2 * inch, 1.15 * inch, 1.15 * inch, 1.15 * inch])]
+    if len(rows) > limit:
+        elements.append(Paragraph(f"{len(rows) - limit} additional requirements with medium-impact findings are included in the Full Audit Report.", styles["small"]))
+    return elements
+
+
+def outstanding_work(stats: ReportStats, changes: list[RequirementChange], findings: list[ImpactFinding], styles: dict[str, ParagraphStyle]) -> list:
+    high_unreviewed = sum(1 for finding in findings if finding.severity == Severity.HIGH and finding.review_status == ReviewStatus.UNREVIEWED)
+    medium_unreviewed = sum(1 for finding in findings if finding.severity == Severity.MEDIUM and finding.review_status == ReviewStatus.UNREVIEWED)
+    rows = [
+        ("Findings remaining unreviewed", stats.review_counts[ReviewStatus.UNREVIEWED]),
+        ("High findings remaining unreviewed", high_unreviewed),
+        ("Medium findings remaining unreviewed", medium_unreviewed),
+        ("Confirmed findings", stats.review_counts[ReviewStatus.CONFIRMED]),
+        ("Dismissed findings", stats.review_counts[ReviewStatus.DISMISSED]),
+    ]
+    table = meta_table([(label, str(value)) for label, value in rows], styles)
+    priority = highest_impact_requirements(changes, [finding for finding in findings if finding.review_status == ReviewStatus.UNREVIEWED], limit=8)
+    elements = [Paragraph("Review Status / Outstanding Work", styles["section"]), table]
+    if priority:
+        elements.extend([Spacer(1, 6), Paragraph("Highest-priority requirements still awaiting review", styles["small"]), highest_impact_table(priority, styles)])
+    return elements
+
+
+def report_note(styles: dict[str, ParagraphStyle]) -> list:
+    return [
+        Paragraph("Methodology / Report Note", styles["section"]),
+        Paragraph(
+            "This Executive Report is generated deterministically from the selected ReqRadar comparison and summarizes the highest-priority results. High-impact findings are shown individually; medium findings are summarized by changed requirement. The Full Audit Report contains the complete finding-level evidence.",
+            styles["body"],
+        ),
+    ]
+
+
+def methodology_section(baseline: str, target: str, styles: dict[str, ParagraphStyle], report_type: ReportType) -> list:
     body = [
         "This report is generated deterministically from the selected ReqRadar comparison.",
         "Findings are grouped by effective severity and show the review state at export time.",
         "Counts are calculated from the comparison summary and associated impact findings.",
     ]
+    if report_type == ReportType.EXECUTIVE:
+        body.append("High-impact findings are shown individually; medium findings are summarized by changed requirement.")
+    else:
+        body.append("The Full Audit Report includes every impact finding available at export time.")
     if baseline or target:
         body.append(f"Compared versions: {baseline or 'Not available'} \u2192 {target or 'Not available'}.")
     return [Paragraph("Methodology / Report Information", styles["section"]), Paragraph(" ".join(body), styles["body"])]
+
+
+def humanize_detection(value: str) -> str:
+    parts = [part.replace("_", " ").strip().title() for part in (value or "").split("+") if part.strip()]
+    return " + ".join(parts) if parts else "Not specified"
 
 
 def escape(value: object) -> str:
