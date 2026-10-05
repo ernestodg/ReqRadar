@@ -2,25 +2,26 @@ import { expect, test } from "@playwright/test";
 import path from "node:path";
 
 test("complete ReqRadar MVP workflow", async ({ page }) => {
+  await page.setExtraHTTPHeaders({ "x-dev-user-id": `playwright-e2e-${Date.now()}` });
   await page.goto("/");
-  await expect(page.getByText("Requirements Impact Radar")).toBeVisible();
-  await expect(page.getByText("Dev auth active")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ReqRadar" })).toBeVisible();
+  await expect(page.getByText("Dev", { exact: true })).toBeVisible();
 
   await page.getByTestId("project-name").fill(`E2E ${Date.now()}`);
   await page.getByTestId("create-project").click();
-  await expect(page.getByText("Upload two CSV versions")).toBeVisible();
+  await expect(page.getByText("requirements · V1 → V2")).toBeVisible();
 
   await page.getByTestId("csv-upload").setInputFiles(path.resolve("../sample-data/requirements-v1.csv"));
   await page.getByTestId("version-label").fill("V1");
   await expect(page.getByTestId("validation-messages")).toContainText("Requirement ID and Title mapped");
   await page.getByTestId("import-csv").click();
-  await expect(page.getByText("V1", { exact: true })).toBeVisible();
+  await expect(page.locator(".imports-section")).toContainText("requirements-v1.csv");
 
   await page.getByTestId("csv-upload").setInputFiles(path.resolve("../sample-data/requirements-v2.csv"));
   await expect(page.getByTestId("validation-messages")).toContainText("requirements-v2.csv ready for mapping");
   await page.getByTestId("version-label").fill("V2");
   await page.getByTestId("import-csv").click();
-  await expect(page.getByText("V2", { exact: true })).toBeVisible();
+  await expect(page.locator(".imports-section")).toContainText("requirements-v2.csv");
 
   await page.getByTestId("compare-versions").click();
   await expect(page.locator(".summary-grid")).toContainText("MODIFIED");

@@ -5,8 +5,6 @@ from csv import DictWriter
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -17,6 +15,7 @@ from app.models import ChangeType, Comparison, ImpactFinding, ImportBatch, Proje
 from app.schemas.api import ComparisonCreate, ExportOut, FindingReview, ImportRequest, ImportOut, ProjectCreate, ProjectOut, UserContext
 from app.services.compare import build_comparison
 from app.services.csv_import import normalize_rows, parse_csv, source_hash, suggest_mapping, validate_rows
+from app.services.pdf_report import build_requirements_impact_pdf
 from app.integrations.billing import BillingService
 
 settings = get_settings()
@@ -214,30 +213,13 @@ def export_csv(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session = De
 def export_pdf(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session = Depends(get_db), user: UserContext = Depends(get_current_user)):
     project = scoped_project(db, project_id, user)
     comparison = db.scalar(select(Comparison).where(Comparison.id == comparison_id, Comparison.project_id == project_id))
-    findings = db.scalars(select(ImpactFinding).join(RequirementChange).where(RequirementChange.comparison_id == comparison_id).order_by(ImpactFinding.severity)).all()
-    buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=letter)
-    width, height = letter
-    y = height - 50
-    pdf.setFont("Helvetica-Bold", 14)
-    pdf.drawString(50, y, "Requirements Impact Radar Report")
-    y -= 24
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(50, y, f"Project: {project.name}")
-    y -= 16
-    pdf.drawString(50, y, f"Summary: {comparison.summary_json if comparison else {}}")
-    y -= 28
-    for finding in findings:
-        if y < 80:
-            pdf.showPage()
-            y = height - 50
-            pdf.setFont("Helvetica", 9)
-        pdf.drawString(50, y, f"{finding.severity.value} {finding.change.external_id} -> {finding.impacted_requirement_external_id} ({finding.review_status.value})")
-        y -= 13
-        pdf.drawString(65, y, finding.reason[:110])
-        y -= 18
-    pdf.save()
-    return ExportOut(filename="radar-comparison.pdf", content_base64=base64.b64encode(buffer.getvalue()).decode(), media_type="application/pdf")
+    if comparison is None:
+        raise HTTPException(status_code=404, detail={"message": "Comparison was not found."})
+    imports = db.scalars(select(ImportBatch).where(ImportBatch.project_id == project.id).order_by(ImportBatch.imported_at)).all()
+    changes = db.scalars(select(RequirementChange).where(RequirementChange.comparison_id == comparison_id).order_by(RequirementChange.external_id)).all()
+    findings = db.scalars(select(ImpactFinding).join(RequirementChange).where(RequirementChange.comparison_id == comparison_id).order_by(ImpactFinding.severity, RequirementChange.external_id, ImpactFinding.impacted_requirement_external_id)).all()
+    pdf_bytes = build_requirements_impact_pdf(project, comparison, imports, changes, findings)
+    return ExportOut(filename="radar-comparison.pdf", content_base64=base64.b64encode(pdf_bytes).decode(), media_type="application/pdf")
 
 
 @app.post("/billing/webhook")
