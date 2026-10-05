@@ -27,3 +27,5 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .diff { @apply max-h-48 overflow-auto rounded border border-radar-line bg-radar-panel p-3 text-xs whitespace-pre-wrap; }
 .finding { @apply rounded border border-radar-line p-3 text-sm; }
 .finding p { @apply my-2 text-xs leading-5 text-slate-600; }
+.finding { overflow-wrap: anywhere; word-break: break-word; }
+.finding * { min-width: 0; }
