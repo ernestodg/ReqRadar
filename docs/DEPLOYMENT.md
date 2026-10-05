@@ -6,9 +6,11 @@
 2. Set `DATABASE_URL`.
 3. Set `APP_ENV=production`.
 4. Set `DEV_AUTH_BYPASS=false`.
-5. Set `SUPABASE_URL` to the Supabase project URL and keep `SUPABASE_ANON_KEY` configured where the client needs it.
-6. Deploy `backend/Dockerfile`.
-7. Run `alembic upgrade head` during container startup.
+5. Set `SUPABASE_URL` to the Supabase project URL. The API derives the issuer and JWKS URL from this value.
+6. Set `FRONTEND_ORIGIN` to the exact deployed frontend origin, for example `https://reqradar.pages.dev`.
+7. Set `ALLOWED_HOSTS` to the exact Railway API host or custom API domain. Do not use `*` in production.
+8. Deploy `backend/Dockerfile`.
+9. Run `alembic upgrade head` before serving traffic. The current container command performs this during startup; for production release windows, prefer a Railway pre-deploy migration step followed by the web process start.
 
 ## Frontend on Cloudflare Pages
 
@@ -24,3 +26,9 @@
 - Paddle billing: `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_ENV`, and price IDs.
 - Optional AI: OpenAI or Ollama provider settings.
 - Optional Sentry: `SENTRY_DSN`.
+
+## Production Guardrails
+
+- The backend refuses to start in production if `DEV_AUTH_BYPASS=true`, `SUPABASE_URL` is missing or invalid, `FRONTEND_ORIGIN` is not an HTTPS origin, or `ALLOWED_HOSTS=*`.
+- The frontend build/runtime configuration must include `VITE_API_URL`, `VITE_SUPABASE_URL`, and `VITE_SUPABASE_ANON_KEY` in production.
+- Do not configure service-role keys in frontend variables.

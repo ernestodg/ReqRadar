@@ -25,9 +25,10 @@ if settings.sentry_dsn:
 
     sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.05)
 app = FastAPI(title="Requirements Impact Radar API")
-app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin, "http://localhost:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+cors_origins = [settings.frontend_origin] if settings.app_env == "production" else list({settings.frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"})
+app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 if settings.app_env == "production":
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[host.strip() for host in settings.allowed_hosts.split(",") if host.strip()])
 
 
 @app.middleware("http")
@@ -37,6 +38,8 @@ async def request_id_middleware(request: Request, call_next):
     response.headers["x-request-id"] = request.state.request_id
     response.headers["x-content-type-options"] = "nosniff"
     response.headers["x-frame-options"] = "DENY"
+    response.headers["referrer-policy"] = "strict-origin-when-cross-origin"
+    response.headers["content-security-policy"] = "frame-ancestors 'none'"
     return response
 
 
@@ -44,6 +47,13 @@ async def request_id_middleware(request: Request, call_next):
 async def http_exception_handler(request: Request, exc: HTTPException):
     detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
     return JSONResponse(status_code=exc.status_code, content={"error": detail, "request_id": request.state.request_id})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    if settings.app_env != "production":
+        raise exc
+    return JSONResponse(status_code=500, content={"error": {"message": "Radar hit an unexpected error."}, "request_id": request.state.request_id})
 
 
 def scoped_project(db: Session, project_id: uuid.UUID, user: UserContext) -> Project:
@@ -116,9 +126,12 @@ async def preview_import(file: UploadFile = File(...)):
     data = await file.read()
     if len(data) > settings.upload_limit_bytes:
         raise HTTPException(status_code=413, detail={"message": "CSV files must be 10 MB or smaller."})
-    if not file.filename.lower().endswith(".csv") or file.content_type not in {"text/csv", "application/vnd.ms-excel", "application/octet-stream"}:
+    if not (file.filename or "").lower().endswith(".csv") or file.content_type not in {"text/csv", "application/vnd.ms-excel", "application/octet-stream"}:
         raise HTTPException(status_code=400, detail={"message": "Radar imports CSV files only."})
-    text = data.decode("utf-8-sig")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail={"message": "CSV files must be valid UTF-8 text."}) from None
     parsed = parse_csv(text)
     mapping = suggest_mapping(parsed.columns)
     warnings = parsed.warnings + validate_rows(parsed.rows, mapping) if mapping else parsed.warnings
@@ -128,18 +141,28 @@ async def preview_import(file: UploadFile = File(...)):
 @app.post("/projects/{project_id}/imports", response_model=ImportOut)
 def create_import(project_id: uuid.UUID, payload: ImportRequest, db: Session = Depends(get_db), user: UserContext = Depends(get_current_user)):
     project = scoped_project(db, project_id, user)
+    if len(payload.csv_text.encode("utf-8")) > settings.upload_limit_bytes:
+        raise HTTPException(status_code=413, detail={"message": "CSV files must be 10 MB or smaller."})
+    if not payload.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail={"message": "Radar imports CSV files only."})
     parsed = parse_csv(payload.csv_text)
     warnings = validate_rows(parsed.rows, payload.mapping)
-    fatal = [w for w in warnings if "required" in w or "missing a Requirement ID" in w or "Duplicate Requirement IDs" in w]
+    fatal = [w for w in warnings if "required" in w.lower() or "missing a requirement id" in w.lower() or "duplicate requirement ids" in w.lower() or "malformed rows" in w.lower() or "no requirement rows" in w.lower() or "mapped column" in w.lower()]
     if fatal:
         raise HTTPException(status_code=400, detail={"message": "Radar could not import the file.", "warnings": warnings})
     rows = normalize_rows(parsed.rows, payload.mapping)
+    if not rows:
+        raise HTTPException(status_code=400, detail={"message": "Radar could not import the file.", "warnings": ["CSV contains no useful requirement rows."]})
+    csv_hash = source_hash(payload.csv_text)
+    existing_import = db.scalar(select(ImportBatch).where(ImportBatch.project_id == project.id, ImportBatch.source_hash == csv_hash))
+    if existing_import is not None:
+        raise HTTPException(status_code=409, detail={"message": "This exact CSV has already been imported for the project."})
     import_count = db.scalar(select(func.count()).select_from(ImportBatch).where(ImportBatch.project_id == project.id)) or 0
     if import_count >= 2:
         raise HTTPException(status_code=403, detail={"message": "The FREE plan allows 2 imports per project."})
     if len(rows) > 250:
         raise HTTPException(status_code=403, detail={"message": "The FREE plan allows up to 250 requirements per project."})
-    batch = ImportBatch(project_id=project.id, filename=payload.filename, version_label=payload.version_label, row_count=len(rows), source_hash=source_hash(payload.csv_text), mapping_json=payload.mapping, status="COMPLETE")
+    batch = ImportBatch(project_id=project.id, filename=payload.filename, version_label=payload.version_label, row_count=len(rows), source_hash=csv_hash, mapping_json=payload.mapping, status="COMPLETE")
     db.add(batch)
     db.flush()
     db.bulk_save_objects([RequirementSnapshot(project_id=project.id, import_batch_id=batch.id, **row) for row in rows])
@@ -151,13 +174,17 @@ def create_import(project_id: uuid.UUID, payload: ImportRequest, db: Session = D
 @app.post("/projects/{project_id}/comparisons")
 def create_comparison(project_id: uuid.UUID, payload: ComparisonCreate, db: Session = Depends(get_db), user: UserContext = Depends(get_current_user)):
     project = scoped_project(db, project_id, user)
+    if payload.baseline_import_id == payload.comparison_import_id:
+        raise HTTPException(status_code=400, detail={"message": "Choose two different imports to compare."})
     for import_id in [payload.baseline_import_id, payload.comparison_import_id]:
         if db.scalar(select(ImportBatch).where(ImportBatch.id == import_id, ImportBatch.project_id == project.id)) is None:
             raise HTTPException(status_code=404, detail={"message": "Import version was not found for this project."})
+    existing = db.scalar(select(Comparison).where(Comparison.project_id == project.id, Comparison.baseline_import_id == payload.baseline_import_id, Comparison.comparison_import_id == payload.comparison_import_id))
+    if existing is not None:
+        return comparison_out(existing)
     comparison = Comparison(project_id=project.id, baseline_import_id=payload.baseline_import_id, comparison_import_id=payload.comparison_import_id, status="COMPARING", summary_json={})
     db.add(comparison)
-    db.commit()
-    db.refresh(comparison)
+    db.flush()
     build_comparison(db, comparison)
     db.refresh(comparison)
     return comparison_out(comparison)
@@ -201,6 +228,9 @@ def safe_csv(value: object) -> object:
 @app.get("/projects/{project_id}/comparisons/{comparison_id}/export.csv", response_model=ExportOut)
 def export_csv(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session = Depends(get_db), user: UserContext = Depends(get_current_user)):
     scoped_project(db, project_id, user)
+    comparison = db.scalar(select(Comparison).where(Comparison.id == comparison_id, Comparison.project_id == project_id))
+    if comparison is None:
+        raise HTTPException(status_code=404, detail={"message": "Comparison was not found."})
     findings = db.scalars(select(ImpactFinding).join(RequirementChange).join(Comparison).where(Comparison.id == comparison_id, Comparison.project_id == project_id)).all()
     output = io.StringIO()
     fields = ["Changed Requirement", "Change Type", "Impacted Requirement", "Severity", "Confidence", "Reason", "Detection Method", "Review Status", "Reviewer Note"]

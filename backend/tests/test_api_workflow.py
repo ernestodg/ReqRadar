@@ -4,8 +4,10 @@ import uuid
 import zlib
 from pathlib import Path
 
+import pytest
+
 from app.core.db import SessionLocal
-from app.models import ChangeType, Comparison, ImpactFinding, ImportBatch, RequirementChange, ReviewStatus, Severity
+from app.models import ChangeType, Comparison, ImpactFinding, ImportBatch, Project, RequirementChange, RequirementSnapshot, ReviewStatus, Severity, Workspace
 from app.services.report_metrics import calculate_report_stats, report_summary_json
 from tests.conftest import sample_mapping
 
@@ -141,12 +143,147 @@ def test_upload_validation_and_plan_limits(client, user_headers):
     assert second.status_code == 403
     bad_type = client.post("/imports/preview", files={"file": ("bad.txt", "x,y\n1,2\n", "text/plain")}, headers=user_headers)
     assert bad_type.status_code == 400
+    invalid_utf8 = client.post("/imports/preview", files={"file": ("bad.csv", b"\xff\xfe\xfa", "text/csv")}, headers=user_headers)
+    assert invalid_utf8.status_code == 400
     oversized = client.post("/imports/preview", files={"file": ("big.csv", b"a" * (10 * 1024 * 1024 + 1), "text/csv")}, headers=user_headers)
     assert oversized.status_code == 413
     import_csv(client, project["id"], user_headers, "requirements-v1.csv", "V1")
     import_csv(client, project["id"], user_headers, "requirements-v2.csv", "V2")
     third = client.post(f"/projects/{project['id']}/imports", json={"filename": "requirements-v1.csv", "version_label": "V3", "csv_text": Path("../sample-data/requirements-v1.csv").read_text(), "mapping": sample_mapping()}, headers=user_headers)
-    assert third.status_code == 403
+    assert third.status_code == 409
+
+
+def test_import_endpoint_rejects_bad_json_imports(client, user_headers, monkeypatch):
+    project = create_project(client, user_headers)
+    valid_payload = {
+        "filename": "requirements.csv",
+        "version_label": "V1",
+        "csv_text": "Requirement ID,Title\nREQ-1,A\n",
+        "mapping": {"Requirement ID": "Requirement ID", "Title": "Title"},
+    }
+
+    bad_extension = client.post(f"/projects/{project['id']}/imports", json={**valid_payload, "filename": "requirements.txt"}, headers=user_headers)
+    assert bad_extension.status_code == 400
+
+    monkeypatch.setattr("app.main.settings.upload_limit_bytes", 10)
+    oversized = client.post(f"/projects/{project['id']}/imports", json={**valid_payload, "csv_text": "Requirement ID,Title\nREQ-1,This is too large\n"}, headers=user_headers)
+    assert oversized.status_code == 413
+
+    monkeypatch.setattr("app.main.settings.upload_limit_bytes", 10 * 1024 * 1024)
+    header_only = client.post(f"/projects/{project['id']}/imports", json={**valid_payload, "csv_text": "Requirement ID,Title\n"}, headers=user_headers)
+    assert header_only.status_code == 400
+
+    missing_column = client.post(f"/projects/{project['id']}/imports", json={**valid_payload, "mapping": {"Requirement ID": "Requirement ID", "Title": "Missing"}}, headers=user_headers)
+    assert missing_column.status_code == 400
+
+    malformed = client.post(f"/projects/{project['id']}/imports", json={**valid_payload, "csv_text": "Requirement ID,Title\nREQ-1,A,extra\n"}, headers=user_headers)
+    assert malformed.status_code == 400
+
+
+def test_duplicate_import_and_comparison_retries_are_idempotent(client, user_headers):
+    project = create_project(client, user_headers)
+    first_import = import_csv(client, project["id"], user_headers, "requirements-v1.csv", "V1")
+    duplicate_import = client.post(
+        f"/projects/{project['id']}/imports",
+        json={
+            "filename": "requirements-v1.csv",
+            "version_label": "V1 retry",
+            "csv_text": Path("../sample-data/requirements-v1.csv").read_text(),
+            "mapping": sample_mapping(),
+        },
+        headers=user_headers,
+    )
+    assert duplicate_import.status_code == 409
+    second_import = import_csv(client, project["id"], user_headers, "requirements-v2.csv", "V2")
+
+    same_import = client.post(
+        f"/projects/{project['id']}/comparisons",
+        json={"baseline_import_id": first_import["id"], "comparison_import_id": first_import["id"]},
+        headers=user_headers,
+    )
+    assert same_import.status_code == 400
+
+    comparison_payload = {"baseline_import_id": first_import["id"], "comparison_import_id": second_import["id"]}
+    first_comparison = client.post(f"/projects/{project['id']}/comparisons", json=comparison_payload, headers=user_headers)
+    assert first_comparison.status_code == 200
+    retried_comparison = client.post(f"/projects/{project['id']}/comparisons", json=comparison_payload, headers=user_headers)
+    assert retried_comparison.status_code == 200
+    assert retried_comparison.json()["id"] == first_comparison.json()["id"]
+
+
+def test_duplicate_import_scope_is_project_not_workspace_or_global(client, user_headers):
+    project = create_project(client, user_headers)
+    csv_text = Path("../sample-data/requirements-v1.csv").read_text()
+    import_csv(client, project["id"], user_headers, "requirements-v1.csv", "V1")
+    import_csv(client, project["id"], user_headers, "requirements-v2.csv", "V2")
+    duplicate_at_cap = client.post(
+        f"/projects/{project['id']}/imports",
+        json={"filename": "requirements-v1.csv", "version_label": "V1 retry", "csv_text": csv_text, "mapping": sample_mapping()},
+        headers=user_headers,
+    )
+    assert duplicate_at_cap.status_code == 409
+
+    client.get("/me", headers=user_headers)
+    with SessionLocal() as db:
+        workspace = db.query(Workspace).filter_by(owner_user_id=user_headers["x-dev-user-id"]).one()
+        sibling_project = Project(workspace_id=workspace.id, name="Sibling Import Project", description="")
+        db.add(sibling_project)
+        db.commit()
+        sibling_project_id = sibling_project.id
+    sibling_import = client.post(
+        f"/projects/{sibling_project_id}/imports",
+        json={"filename": "requirements-v1.csv", "version_label": "V1", "csv_text": csv_text, "mapping": sample_mapping()},
+        headers=user_headers,
+    )
+    assert sibling_import.status_code == 200, sibling_import.text
+
+    other_workspace = {"x-dev-user-id": "other-duplicate-workspace"}
+    other_project = create_project(client, other_workspace, name="Other Workspace")
+    other_import = client.post(
+        f"/projects/{other_project['id']}/imports",
+        json={"filename": "requirements-v1.csv", "version_label": "V1", "csv_text": csv_text, "mapping": sample_mapping()},
+        headers=other_workspace,
+    )
+    assert other_import.status_code == 200, other_import.text
+
+
+def test_failed_import_and_comparison_do_not_leave_partial_rows(client, user_headers, monkeypatch):
+    project = create_project(client, user_headers)
+    bad_import = client.post(
+        f"/projects/{project['id']}/imports",
+        json={"filename": "bad.csv", "version_label": "Bad", "csv_text": "Requirement ID,Title\nREQ-1,A\nREQ-1,B\n", "mapping": {"Requirement ID": "Requirement ID", "Title": "Title"}},
+        headers=user_headers,
+    )
+    assert bad_import.status_code == 400
+    with SessionLocal() as db:
+        assert db.query(ImportBatch).filter_by(project_id=project["id"]).count() == 0
+        assert db.query(RequirementSnapshot).filter_by(project_id=project["id"]).count() == 0
+
+    first_import = import_csv(client, project["id"], user_headers, "requirements-v1.csv", "V1")
+    second_import = import_csv(client, project["id"], user_headers, "requirements-v2.csv", "V2")
+
+    def fail_build(*args, **kwargs):
+        raise RuntimeError("forced comparison failure")
+
+    monkeypatch.setattr("app.main.build_comparison", fail_build)
+    with pytest.raises(RuntimeError, match="forced comparison failure"):
+        client.post(
+            f"/projects/{project['id']}/comparisons",
+            json={"baseline_import_id": first_import["id"], "comparison_import_id": second_import["id"]},
+            headers=user_headers,
+        )
+    with SessionLocal() as db:
+        assert db.query(Comparison).filter_by(project_id=project["id"]).count() == 0
+        assert db.query(RequirementChange).count() == 0
+        assert db.query(ImpactFinding).count() == 0
+
+    monkeypatch.undo()
+    retry = client.post(
+        f"/projects/{project['id']}/comparisons",
+        json={"baseline_import_id": first_import["id"], "comparison_import_id": second_import["id"]},
+        headers=user_headers,
+    )
+    assert retry.status_code == 200, retry.text
 
 
 def test_csv_formula_injection_protection():

@@ -1,3 +1,6 @@
+import csv
+from io import StringIO
+
 from app.services.csv_import import content_hash, normalize_rows, parse_csv, split_multi, suggest_mapping, validate_rows
 
 
@@ -26,6 +29,29 @@ def test_common_name_mapping_and_blank_ids_and_malformed_rows():
     warnings = parsed.warnings + validate_rows(parsed.rows, mapping)
     assert any("malformed rows" in warning for warning in warnings)
     assert any("missing a Requirement ID" in warning for warning in warnings)
+
+
+def test_header_only_csv_warns_no_requirement_rows():
+    parsed = parse_csv("Requirement ID,Title\n")
+    warnings = validate_rows(parsed.rows, {"Requirement ID": "Requirement ID", "Title": "Title"})
+    assert warnings == ["CSV contains no requirement rows."]
+
+
+def test_missing_mapped_column_warns_before_normalization():
+    parsed = parse_csv("Requirement ID,Title\nREQ-1,A\n")
+    warnings = validate_rows(parsed.rows, {"Requirement ID": "Requirement ID", "Title": "Missing Title"})
+    assert any("Mapped column was not found" in warning for warning in warnings)
+
+
+def test_csv_parser_preserves_quoted_commas_quotes_and_newlines():
+    handle = StringIO()
+    writer = csv.writer(handle)
+    writer.writerow(["Requirement ID", "Title", "Description"])
+    writer.writerow(["REQ-1", "Title, with comma", 'Line one\nLine "two"'])
+    parsed = parse_csv(handle.getvalue())
+    rows = normalize_rows(parsed.rows, {"Requirement ID": "Requirement ID", "Title": "Title", "Description": "Description"})
+    assert rows[0]["title"] == "Title, with comma"
+    assert rows[0]["description"] == 'Line one\nLine "two"'
 
 
 def test_relationship_delimiter_normalization():

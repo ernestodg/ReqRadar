@@ -117,6 +117,12 @@ def test_missing_authorization_header_is_rejected(client, monkeypatch, signing_k
     assert response.status_code == 401
 
 
+def test_non_bearer_authorization_header_is_rejected(client, monkeypatch, signing_keys):
+    configure_production_auth(monkeypatch, signing_keys)
+    response = client.get("/me", headers={"Authorization": "Basic abc123"})
+    assert response.status_code == 401
+
+
 def test_hs256_token_is_not_accepted(client, monkeypatch, signing_keys):
     configure_production_auth(monkeypatch, signing_keys)
     hs_token = token("legacy-secret", algorithm="HS256")

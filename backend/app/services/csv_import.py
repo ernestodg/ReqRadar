@@ -28,6 +28,7 @@ def parse_csv(csv_text: str) -> ParsedCsv:
     sample = csv_text[:4096]
     try:
         dialect = csv.Sniffer().sniff(sample) if sample.strip() else csv.excel
+        dialect.doublequote = True
     except csv.Error:
         dialect = csv.excel
     reader = csv.DictReader(io.StringIO(csv_text), dialect=dialect)
@@ -76,6 +77,14 @@ def validate_rows(rows: list[dict[str, str]], mapping: dict[str, str]) -> list[s
     title_col = mapping.get("Title")
     if not id_col or not title_col:
         warnings.append("Requirement ID and Title mappings are required.")
+        return warnings
+    if not rows:
+        warnings.append("CSV contains no requirement rows.")
+        return warnings
+    columns = set(rows[0])
+    missing_columns = [column for column in mapping.values() if column and column not in columns]
+    if missing_columns:
+        warnings.append(f"Mapped column was not found in the CSV: {', '.join(sorted(set(missing_columns))[:10])}.")
         return warnings
     seen: set[str] = set()
     blanks = 0

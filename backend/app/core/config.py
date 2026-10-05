@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "postgresql+psycopg://radar:radar@postgres:5432/radar"
     frontend_origin: str = "http://localhost:5173"
+    allowed_hosts: str = "*"
     dev_auth_bypass: bool = True
     ai_provider: str = "none"
     ai_model: str = ""
@@ -32,12 +33,22 @@ class Settings(BaseSettings):
             raise RuntimeError("DEV_AUTH_BYPASS cannot be enabled in production.")
         if self.app_env == "production":
             validate_supabase_url(self.supabase_url)
+            validate_https_origin(self.frontend_origin, "FRONTEND_ORIGIN")
+            if self.allowed_hosts.strip() == "*":
+                raise RuntimeError("ALLOWED_HOSTS must be explicitly configured in production.")
 
 
 def validate_supabase_url(value: str) -> str:
     parsed = urlparse(value.rstrip("/"))
     if parsed.scheme != "https" or not parsed.netloc or parsed.path:
         raise RuntimeError("SUPABASE_URL must be a valid HTTPS project URL.")
+    return value.rstrip("/")
+
+
+def validate_https_origin(value: str, name: str) -> str:
+    parsed = urlparse(value.rstrip("/"))
+    if parsed.scheme != "https" or not parsed.netloc or parsed.path or parsed.params or parsed.query or parsed.fragment:
+        raise RuntimeError(f"{name} must be a valid HTTPS origin.")
     return value.rstrip("/")
 
 
