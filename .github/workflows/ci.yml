@@ -34,6 +34,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: ruff check app tests
+      - run: alembic upgrade head
       - run: pytest
   frontend:
     runs-on: ubuntu-24.04
