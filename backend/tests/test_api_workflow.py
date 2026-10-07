@@ -25,6 +25,21 @@ def import_csv(client, project_id, headers, filename, version):
     return response.json()
 
 
+def generated_csv(prefix: str, count: int, changed: int = 0) -> str:
+    rows = ["Requirement ID,Type,Title,Description,Status,Parent ID,Related To,Tags,Owner"]
+    for index in range(1, count + 1):
+        suffix = f"{index:03d}"
+        changed_text = f" changed {changed}" if changed and index <= changed else ""
+        rows.append(f"{prefix}-{suffix},Requirement,{prefix} title {suffix},{prefix} description {suffix}{changed_text},Active,,,,Owner")
+    return "\n".join(rows) + "\n"
+
+
+def import_text(client, project_id, headers, filename, version, text):
+    response = client.post(f"/projects/{project_id}/imports", json={"filename": filename, "version_label": version, "csv_text": text, "mapping": sample_mapping()}, headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 def create_comparison(client, project_id, headers):
     detail = client.get(f"/projects/{project_id}", headers=headers).json()
     response = client.post(f"/projects/{project_id}/comparisons", json={"baseline_import_id": detail["imports"][0]["id"], "comparison_import_id": detail["imports"][1]["id"]}, headers=headers)
@@ -151,6 +166,60 @@ def test_upload_validation_and_plan_limits(client, user_headers):
     import_csv(client, project["id"], user_headers, "requirements-v2.csv", "V2")
     third = client.post(f"/projects/{project['id']}/imports", json={"filename": "requirements-v1.csv", "version_label": "V3", "csv_text": Path("../sample-data/requirements-v1.csv").read_text(), "mapping": sample_mapping()}, headers=user_headers)
     assert third.status_code == 409
+
+
+@pytest.mark.parametrize(("count", "expected_status"), [(249, 200), (250, 200), (251, 403)])
+def test_free_plan_requirement_limit_is_per_import(client, user_headers, count, expected_status):
+    project = create_project(client, user_headers)
+    response = client.post(
+        f"/projects/{project['id']}/imports",
+        json={"filename": f"limit-{count}.csv", "version_label": f"{count} rows", "csv_text": generated_csv(f"REQ-LIMIT-{count}", count), "mapping": sample_mapping()},
+        headers=user_headers,
+    )
+    assert response.status_code == expected_status, response.text
+    if expected_status == 403:
+        assert "250 requirements per import" in response.text
+
+
+def test_free_project_allows_five_distinct_import_versions(client, user_headers):
+    project = create_project(client, user_headers)
+    imports = [
+        import_text(client, project["id"], user_headers, f"generated-v{version}.csv", f"V{version}", generated_csv(f"REQ-V{version}", 3))
+        for version in range(1, 6)
+    ]
+
+    detail = client.get(f"/projects/{project['id']}", headers=user_headers)
+    assert detail.status_code == 200, detail.text
+    assert [item["version_label"] for item in detail.json()["imports"]] == ["V1", "V2", "V3", "V4", "V5"]
+    assert [item["id"] for item in detail.json()["imports"]] == [item["id"] for item in imports]
+
+
+def test_sequential_comparisons_preserve_history_and_idempotency(client, user_headers):
+    project = create_project(client, user_headers)
+    imports = [
+        import_text(client, project["id"], user_headers, f"sequence-v{version}.csv", f"V{version}", generated_csv("REQ-SEQ", 4, changed=version))
+        for version in range(1, 6)
+    ]
+
+    comparison_ids = []
+    for index in range(4):
+        payload = {"baseline_import_id": imports[index]["id"], "comparison_import_id": imports[index + 1]["id"]}
+        response = client.post(f"/projects/{project['id']}/comparisons", json=payload, headers=user_headers)
+        assert response.status_code == 200, response.text
+        comparison_ids.append(response.json()["id"])
+
+        retry = client.post(f"/projects/{project['id']}/comparisons", json=payload, headers=user_headers)
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["id"] == response.json()["id"]
+
+    assert len(set(comparison_ids)) == 4
+    detail = client.get(f"/projects/{project['id']}", headers=user_headers).json()
+    assert {item["id"] for item in detail["comparisons"]} == set(comparison_ids)
+    assert len(detail["comparisons"]) == 4
+    for comparison_id in comparison_ids:
+        retrieved = client.get(f"/projects/{project['id']}/comparisons/{comparison_id}", headers=user_headers)
+        assert retrieved.status_code == 200, retrieved.text
+        assert retrieved.json()["comparison"]["id"] == comparison_id
 
 
 def test_import_endpoint_rejects_bad_json_imports(client, user_headers, monkeypatch):

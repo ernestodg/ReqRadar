@@ -157,11 +157,8 @@ def create_import(project_id: uuid.UUID, payload: ImportRequest, db: Session = D
     existing_import = db.scalar(select(ImportBatch).where(ImportBatch.project_id == project.id, ImportBatch.source_hash == csv_hash))
     if existing_import is not None:
         raise HTTPException(status_code=409, detail={"message": "This exact CSV has already been imported for the project."})
-    import_count = db.scalar(select(func.count()).select_from(ImportBatch).where(ImportBatch.project_id == project.id)) or 0
-    if import_count >= 2:
-        raise HTTPException(status_code=403, detail={"message": "The FREE plan allows 2 imports per project."})
     if len(rows) > 250:
-        raise HTTPException(status_code=403, detail={"message": "The FREE plan allows up to 250 requirements per project."})
+        raise HTTPException(status_code=403, detail={"message": "The FREE plan allows up to 250 requirements per import."})
     batch = ImportBatch(project_id=project.id, filename=payload.filename, version_label=payload.version_label, row_count=len(rows), source_hash=csv_hash, mapping_json=payload.mapping, status="COMPLETE")
     db.add(batch)
     db.flush()
@@ -197,7 +194,12 @@ def get_comparison(project_id: uuid.UUID, comparison_id: uuid.UUID, db: Session 
     if comparison is None:
         raise HTTPException(status_code=404, detail={"message": "Comparison was not found."})
     changes = db.scalars(select(RequirementChange).where(RequirementChange.comparison_id == comparison.id).order_by(RequirementChange.external_id)).all()
-    findings = db.scalars(select(ImpactFinding).join(RequirementChange).where(RequirementChange.comparison_id == comparison.id)).all()
+    findings = db.scalars(
+        select(ImpactFinding)
+        .join(RequirementChange)
+        .where(RequirementChange.comparison_id == comparison.id)
+        .order_by(RequirementChange.external_id, ImpactFinding.impacted_requirement_external_id)
+    ).all()
     stats = calculate_report_stats(comparison, changes, findings)
     return {"comparison": comparison_out(comparison, report_summary_json(stats)), "changes": [change_out(item) for item in changes], "findings": [finding_out(item) for item in findings]}
 
