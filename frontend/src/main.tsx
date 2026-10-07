@@ -163,7 +163,8 @@ function useThemePreference() {
 function ReqRadarWordmark() {
   return (
     <div className="wordmark">
-      <img className="wordmark-image" src="/reqradar-logo.png" alt="ReqRadar" />
+      <img className="wordmark-image" src="/reqradar-wordmark.png" alt="ReqRadar" />
+      <p>Know what a requirement change affects before it becomes a defect.</p>
     </div>
   );
 }

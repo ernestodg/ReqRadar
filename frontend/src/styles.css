@@ -56,15 +56,22 @@ button { color: inherit; }
   background: var(--surface);
   padding: 0.85rem 1.25rem;
 }
-.wordmark { display: flex; min-width: 0; align-items: center; }
+.wordmark { display: grid; min-width: 0; align-items: center; gap: 0.15rem; }
 .wordmark-image {
   display: block;
-  width: min(25rem, 52vw);
+  width: min(21rem, 52vw);
   max-width: 100%;
   height: auto;
   object-fit: contain;
 }
-.app-header .wordmark-image { width: min(18rem, 42vw); }
+.wordmark p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+.app-header .wordmark-image { width: min(15rem, 40vw); }
+.app-header .wordmark p { max-width: min(24rem, 44vw); font-size: 0.78rem; }
 .header-actions { display: flex; align-items: center; gap: 0.65rem; }
 .dev-pill, .user-pill, .theme-control {
   display: inline-flex;

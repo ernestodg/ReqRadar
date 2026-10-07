@@ -287,8 +287,8 @@ def executive_summary(project: Project, comparison: Comparison, baseline: str, t
 
 def brand_title(styles: dict[str, ParagraphStyle]) -> Table:
     table = Table(
-        [[ReportLogoFlowable(2.35 * inch)]],
-        colWidths=[2.35 * inch],
+        [[ReportLogoFlowable(4.65 * inch)]],
+        colWidths=[4.65 * inch],
         hAlign="CENTER",
     )
     table.setStyle(
