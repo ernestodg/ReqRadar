@@ -12,7 +12,7 @@ const client = new QueryClient();
 
 type Project = { id: string; name: string; description: string; requirements_count: number; changed_requirements: number; unresolved_findings: number };
 type ImportBatch = { id: string; filename: string; version_label: string; row_count: number; status: string };
-type Comparison = { id: string; summary_json: Record<string, number>; status: string };
+type Comparison = { id: string; baseline_import_id: string; comparison_import_id: string; summary_json: Record<string, number>; status: string };
 type Change = { id: string; external_id: string; change_type: string; changed_fields: Record<string, unknown>; text_diff: string };
 type Finding = { id: string; requirement_change_id: string; impacted_requirement_external_id: string; severity: string; confidence: number; detection_method: string; reason: string; review_status: string; reviewer_note?: string };
 type ThemePreference = "system" | "light" | "dark";
@@ -309,7 +309,11 @@ function ProjectWorkspace({ project }: { project: Project }) {
           </div>
         </section>
       </div>
-      {comparison.data ? <ComparisonResults projectId={project.id} data={comparison.data} /> : <ComparisonHistory projectId={project.id} comparisons={detail.data?.comparisons || []} setComparisonId={setComparisonId} />}
+      {comparison.data ? (
+        <ComparisonResults project={project} imports={imports} data={comparison.data} onBackToHistory={() => setComparisonId(null)} />
+      ) : (
+        <ComparisonHistory comparisons={detail.data?.comparisons || []} imports={imports} setComparisonId={setComparisonId} />
+      )}
     </div>
   );
 }
@@ -318,19 +322,43 @@ function MappingEditor({ mapping, setMapping }: { mapping: Record<string, string
   return <div className="grid grid-cols-2 gap-2 text-xs">{Object.keys(mapping).map((field) => <label key={field} className="space-y-1"><span>{field}</span><input className="field" value={mapping[field]} onChange={(e) => setMapping({ ...mapping, [field]: e.target.value })} /></label>)}</div>;
 }
 
-function ComparisonHistory({ projectId, comparisons, setComparisonId }: { projectId: string; comparisons: Comparison[]; setComparisonId: (id: string) => void }) {
-  return <section className="history-section"><h3 className="section-title">Comparison History</h3>{comparisons.map((comparison) => <button className="history-row" key={comparison.id} onClick={() => setComparisonId(comparison.id)}>Changed {comparison.summary_json.MODIFIED || 0} · Added {comparison.summary_json.ADDED || 0} · Removed {comparison.summary_json.REMOVED || 0} · Impacts {comparison.summary_json.impact_findings || 0}</button>)}</section>;
+function comparisonVersionLabel(comparison: Comparison, imports: ImportBatch[]) {
+  const labels = new Map(imports.map((item) => [item.id, item.version_label]));
+  return `${labels.get(comparison.baseline_import_id) || "Unknown"} → ${labels.get(comparison.comparison_import_id) || "Unknown"}`;
 }
 
-function ComparisonResults({ projectId, data }: { projectId: string; data: { comparison: Comparison; changes: Change[]; findings: Finding[] } }) {
+function ComparisonHistory({ comparisons, imports, setComparisonId }: { comparisons: Comparison[]; imports: ImportBatch[]; setComparisonId: (id: string) => void }) {
+  return (
+    <section className="history-section">
+      <h3 className="section-title">Comparison History</h3>
+      {comparisons.map((comparison) => (
+        <button data-testid="comparison-history-row" className="history-row" key={comparison.id} onClick={() => setComparisonId(comparison.id)}>
+          <strong>{comparisonVersionLabel(comparison, imports)}</strong>
+          <span>Changed {comparison.summary_json.MODIFIED || 0} · Added {comparison.summary_json.ADDED || 0} · Removed {comparison.summary_json.REMOVED || 0} · Impacts {comparison.summary_json.impact_findings || 0}</span>
+        </button>
+      ))}
+    </section>
+  );
+}
+
+function ComparisonResults({ project, imports, data, onBackToHistory }: { project: Project; imports: ImportBatch[]; data: { comparison: Comparison; changes: Change[]; findings: Finding[] }; onBackToHistory: () => void }) {
   const [selected, setSelected] = useState(data.changes.find((c) => c.change_type !== "UNCHANGED")?.id || data.changes[0]?.id);
   const [changeTypeFilter, setChangeTypeFilter] = useState("ALL");
   const [severityFilter, setSeverityFilter] = useState("ALL");
   const change = data.changes.find((c) => c.id === selected);
   const findings = data.findings.filter((f) => f.requirement_change_id === selected && (severityFilter === "ALL" || f.severity === severityFilter));
   const rows = data.changes.filter((c) => c.change_type !== "UNCHANGED" && (changeTypeFilter === "ALL" || c.change_type === changeTypeFilter));
+  const versionLabel = comparisonVersionLabel(data.comparison, imports);
   return (
     <section className="comparison-section">
+      <div className="comparison-nav">
+        <button data-testid="back-to-history" className="link-btn" type="button" onClick={onBackToHistory}>← Comparison history</button>
+        <div className="comparison-breadcrumb">
+          <button data-testid="project-breadcrumb" type="button" onClick={onBackToHistory}>{project.name}</button>
+          <span>/</span>
+          <strong>Comparison {versionLabel}</strong>
+        </div>
+      </div>
       <div className="summary-grid">
         {["MODIFIED", "ADDED", "REMOVED", "impact_findings", "high_impact"].map((key) => <div key={key}><span>{key.replace("_", " ")}</span><strong>{data.comparison.summary_json[key] || 0}</strong></div>)}
       </div>
@@ -344,7 +372,7 @@ function ComparisonResults({ projectId, data }: { projectId: string; data: { com
           <div className="change-list">{rows.map((row) => <button data-testid="change-row" key={row.id} className={`change-row ${row.id === selected ? "active" : ""}`} onClick={() => setSelected(row.id)}><span>{row.external_id}</span><span className={`badge ${row.change_type.toLowerCase()}`}>{row.change_type}</span><span>{data.findings.filter((f) => f.requirement_change_id === row.id).length}</span></button>)}</div>
         </div>
         <aside className="impact-inspector">
-        <div className="inspector-header"><h3>{change?.external_id}</h3><ExportButtons projectId={projectId} comparisonId={data.comparison.id} /></div>
+        <div className="inspector-header"><h3>{change?.external_id}</h3><ExportButtons projectId={project.id} comparisonId={data.comparison.id} /></div>
         <div className="mb-2 text-xs font-semibold text-slate-600">OLD / NEW word diff</div>
         <pre data-testid="change-diff" className="diff">{change?.text_diff}</pre>
         <h3 className="section-title impact-title">Impacts</h3>

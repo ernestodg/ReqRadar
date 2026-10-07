@@ -313,7 +313,8 @@ button { color: inherit; }
 .tr:last-child { border-bottom: 0; }
 .tr span { min-width: 0; overflow-wrap: anywhere; }
 .history-row {
-  display: block;
+  display: grid;
+  gap: 0.2rem;
   width: 100%;
   border: 0;
   border-bottom: 1px solid var(--line);
@@ -322,12 +323,38 @@ button { color: inherit; }
   text-align: left;
   font-size: 0.9rem;
 }
+.history-row strong { font-size: 0.95rem; }
+.history-row span { color: var(--muted); }
 
 .comparison-section {
   display: grid;
   gap: 1rem;
   min-width: 0;
 }
+.comparison-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+}
+.comparison-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.comparison-breadcrumb button, .link-btn {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  font-weight: 700;
+}
+.comparison-breadcrumb button:hover, .link-btn:hover { color: var(--accent-strong); text-decoration: underline; }
+.comparison-breadcrumb strong { color: var(--text); font-weight: 700; }
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(110px, 1fr));
