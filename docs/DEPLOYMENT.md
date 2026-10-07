@@ -19,16 +19,25 @@
 3. Output directory: `dist`.
 4. Set `VITE_API_URL` to the deployed API origin.
 5. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth.
+6. For Phase 4 beta telemetry, set browser-safe observability values only:
+   - `VITE_TELEMETRY_ENABLED=true`
+   - `VITE_POSTHOG_KEY`
+   - `VITE_POSTHOG_HOST`
+   - `VITE_SENTRY_DSN`
+   - `VITE_SENTRY_ENVIRONMENT=production`
+   - `VITE_SENTRY_RELEASE` to the deployed release identifier.
 
 ## Manual Services
 
 - Supabase Auth: backend `SUPABASE_URL` for JWKS-based JWT verification; frontend `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for email/password sign-in.
 - Paddle billing: `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_ENV`, and price IDs.
 - Optional AI: OpenAI or Ollama provider settings.
-- Optional Sentry: `SENTRY_DSN`.
+- Optional backend PostHog analytics: `TELEMETRY_ENABLED=true`, `POSTHOG_API_KEY`, `POSTHOG_HOST`, and `APP_RELEASE`.
+- Optional backend Sentry: `SENTRY_DSN`, `SENTRY_ENVIRONMENT=production`, and `SENTRY_RELEASE`.
 
 ## Production Guardrails
 
 - The backend refuses to start in production if `DEV_AUTH_BYPASS=true`, `SUPABASE_URL` is missing or invalid, `FRONTEND_ORIGIN` is not an HTTPS origin, or `ALLOWED_HOSTS=*`.
 - The frontend build/runtime configuration must include `VITE_API_URL`, `VITE_SUPABASE_URL`, and `VITE_SUPABASE_ANON_KEY` in production.
 - Do not configure service-role keys in frontend variables.
+- Telemetry must remain disabled locally unless explicitly testing it. Do not put PostHog secret API keys, Sentry auth tokens, Supabase service-role keys, or database credentials in frontend variables.

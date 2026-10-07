@@ -8,6 +8,12 @@ export type FrontendConfig = {
   authEnabled: boolean;
   authConfigError: string | null;
   isDevelopment: boolean;
+  telemetryEnabled: boolean;
+  posthogKey: string;
+  posthogHost: string;
+  sentryDsn: string;
+  sentryEnvironment: string;
+  sentryRelease: string;
 };
 
 function missingSupabaseConfig(url: string, anonKey: string) {
@@ -35,4 +41,10 @@ export const frontendConfig: FrontendConfig = {
   authEnabled: !missingSupabaseConfig(import.meta.env.VITE_SUPABASE_URL || "", import.meta.env.VITE_SUPABASE_ANON_KEY || ""),
   authConfigError: apiConfigError() || authConfigError(),
   isDevelopment: import.meta.env.DEV,
+  telemetryEnabled: import.meta.env.VITE_TELEMETRY_ENABLED === "true",
+  posthogKey: import.meta.env.VITE_POSTHOG_KEY || "",
+  posthogHost: import.meta.env.VITE_POSTHOG_HOST || "https://app.posthog.com",
+  sentryDsn: import.meta.env.VITE_SENTRY_DSN || "",
+  sentryEnvironment: import.meta.env.VITE_SENTRY_ENVIRONMENT || (import.meta.env.DEV ? "development" : "production"),
+  sentryRelease: import.meta.env.VITE_SENTRY_RELEASE || "",
 };

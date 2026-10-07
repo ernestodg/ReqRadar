@@ -59,3 +59,15 @@ class ExportOut(BaseModel):
     filename: str
     content_base64: str
     media_type: str
+
+
+class FeedbackCreate(BaseModel):
+    feedback_type: str = Field(pattern="^(Bug|Confusing|Idea)$")
+    message: str = Field(min_length=1, max_length=4000)
+    screen: str = Field(default="", max_length=120)
+
+
+class FeedbackOut(BaseModel):
+    id: UUID
+    feedback_type: str
+    screen: str

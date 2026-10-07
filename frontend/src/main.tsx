@@ -5,10 +5,14 @@ import type { Session } from "@supabase/supabase-js";
 import { Download, FileUp, LogOut, Monitor, Moon, Plus, RefreshCw, ShieldCheck, Sun } from "lucide-react";
 import { ApiAuthError, request } from "./lib/api";
 import { frontendConfig } from "./lib/config";
+import { initErrorMonitoring } from "./lib/errorMonitoring";
 import { supabase } from "./lib/supabase";
+import { captureAnalytics, identifyAnalyticsUser, initAnalytics } from "./lib/telemetry";
 import "./styles.css";
 
 const client = new QueryClient();
+initErrorMonitoring();
+initAnalytics();
 
 type Project = { id: string; name: string; description: string; requirements_count: number; changed_requirements: number; unresolved_findings: number };
 type ImportBatch = { id: string; filename: string; version_label: string; row_count: number; status: string };
@@ -112,6 +116,9 @@ function AuthScreen({ initialError }: { initialError: string | null }) {
       setError(result.error.message);
       return;
     }
+    if (mode === "signup" && result.data.user?.id) {
+      captureAnalytics("account_created", { user_id: result.data.user.id });
+    }
     if (mode === "signup" && !result.data.session) {
       setMessage("Check your email to confirm your account before signing in.");
     }
@@ -153,28 +160,10 @@ function useThemePreference() {
   return { theme, setTheme };
 }
 
-function ReqRadarLogo() {
-  return (
-    <svg className="logo-mark" viewBox="0 0 40 40" role="img" aria-label="ReqRadar logo">
-      <rect width="40" height="40" rx="10" />
-      <circle className="radar-ring outer" cx="20" cy="20" r="12.5" />
-      <circle className="radar-ring inner" cx="20" cy="20" r="7" />
-      <path className="radar-sweep" d="M20 20 12 12" />
-      <circle className="radar-center" cx="20" cy="20" r="2.6" />
-      <circle className="radar-blip" cx="29" cy="14" r="2.3" />
-      <circle className="radar-blip" cx="17" cy="31" r="2.1" />
-    </svg>
-  );
-}
-
 function ReqRadarWordmark() {
   return (
     <div className="wordmark">
-      <ReqRadarLogo />
-      <div>
-        <h1>ReqRadar</h1>
-        <p>Know what a requirement change affects before it becomes a defect.</p>
-      </div>
+      <img className="wordmark-image" src="/reqradar-logo.png" alt="ReqRadar" />
     </div>
   );
 }
@@ -203,6 +192,9 @@ function RadarApp({ session }: { session: Session | null }) {
     client.clear();
     await supabase?.auth.signOut();
   };
+  React.useEffect(() => {
+    identifyAnalyticsUser(session?.user.id);
+  }, [session?.user.id]);
   return (
     <main className="app-shell">
       <header className="app-header">
@@ -255,6 +247,38 @@ function EmptyState() {
   return <div className="empty-state">Create a project to upload your first requirements register.</div>;
 }
 
+function FeedbackPanel() {
+  const [open, setOpen] = useState(false);
+  const [feedbackType, setFeedbackType] = useState("Bug");
+  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const mutation = useMutation({
+    mutationFn: () => request<{ id: string }>("/feedback", { method: "POST", body: JSON.stringify({ feedback_type: feedbackType, message, screen: "app" }) }),
+    onSuccess: () => {
+      setMessage("");
+      setStatus("Feedback sent. Thank you.");
+    },
+    onError: (error) => setStatus(error.message),
+  });
+  return (
+    <section className="feedback-panel">
+      <button className="small-btn" type="button" onClick={() => setOpen((value) => !value)}>Send feedback</button>
+      {open ? (
+        <form className="feedback-form" onSubmit={(event) => { event.preventDefault(); if (message.trim()) mutation.mutate(); }}>
+          <select className="field" value={feedbackType} onChange={(event) => setFeedbackType(event.target.value)}>
+            <option>Bug</option>
+            <option>Confusing</option>
+            <option>Idea</option>
+          </select>
+          <textarea className="field feedback-message" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="What should we know?" maxLength={4000} />
+          {status ? <p className={mutation.isError ? "form-error" : "form-success"}>{status}</p> : null}
+          <button className="btn" type="submit" disabled={!message.trim() || mutation.isPending}>Submit</button>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
 function ProjectWorkspace({ project }: { project: Project }) {
   const queryClient = useQueryClient();
   const [csvText, setCsvText] = useState("");
@@ -280,6 +304,7 @@ function ProjectWorkspace({ project }: { project: Project }) {
   const latest = imports[imports.length - 1];
   return (
     <div className="workspace-stack">
+      <FeedbackPanel />
       <div className="workspace-header">
         <div>
           <h2>{project.name}</h2>

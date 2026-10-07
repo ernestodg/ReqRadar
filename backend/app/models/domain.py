@@ -48,6 +48,17 @@ class Project(Base):
     workspace = relationship("Workspace")
 
 
+class Feedback(Base):
+    __tablename__ = "feedback"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[str] = mapped_column(String(200), index=True)
+    feedback_type: Mapped[str] = mapped_column(String(30))
+    message: Mapped[str] = mapped_column(Text)
+    screen: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ImportBatch(Base):
     __tablename__ = "import_batches"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -11,19 +11,28 @@ from sqlalchemy.orm import Session
 from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.models import ChangeType, Comparison, ImpactFinding, ImportBatch, Project, RequirementChange, RequirementSnapshot, ReviewStatus, Severity
-from app.schemas.api import ComparisonCreate, ExportOut, FindingReview, ImportRequest, ImportOut, ProjectCreate, ProjectOut, UserContext
+from app.models import ChangeType, Comparison, Feedback, ImpactFinding, ImportBatch, Project, RequirementChange, RequirementSnapshot, ReviewStatus, Severity
+from app.schemas.api import ComparisonCreate, ExportOut, FeedbackCreate, FeedbackOut, FindingReview, ImportRequest, ImportOut, ProjectCreate, ProjectOut, UserContext
 from app.services.compare import build_comparison
 from app.services.csv_import import normalize_rows, parse_csv, source_hash, suggest_mapping, validate_rows
 from app.services.pdf_report import ReportType, build_requirements_impact_pdf
 from app.services.report_metrics import calculate_report_stats, report_summary_json
 from app.integrations.billing import BillingService
+from app.integrations.analytics import capture_event
+from app.integrations.error_monitoring import before_send
 
 settings = get_settings()
 if settings.sentry_dsn:
     import sentry_sdk
 
-    sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.05)
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.sentry_environment or settings.app_env,
+        release=settings.sentry_release or settings.app_release or None,
+        send_default_pii=False,
+        request_bodies="never",
+        before_send=before_send,
+    )
 app = FastAPI(title="Requirements Impact Radar API")
 cors_origins = [settings.frontend_origin] if settings.app_env == "production" else list({settings.frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"})
 app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -110,6 +119,7 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
     db.add(project)
     db.commit()
     db.refresh(project)
+    capture_event(user.user_id, "project_created", {"workspace_id": str(user.workspace_id), "project_id": str(project.id)})
     return ProjectOut(id=project.id, name=project.name, description=project.description)
 
 
@@ -165,6 +175,19 @@ def create_import(project_id: uuid.UUID, payload: ImportRequest, db: Session = D
     db.bulk_save_objects([RequirementSnapshot(project_id=project.id, import_batch_id=batch.id, **row) for row in rows])
     db.commit()
     db.refresh(batch)
+    project_import_count = db.scalar(select(func.count()).select_from(ImportBatch).where(ImportBatch.project_id == project.id)) or 0
+    capture_event(
+        user.user_id,
+        "import_completed",
+        {
+            "workspace_id": str(user.workspace_id),
+            "project_id": str(project.id),
+            "import_id": str(batch.id),
+            "version_label": batch.version_label,
+            "requirement_count": batch.row_count,
+            "project_import_count": project_import_count,
+        },
+    )
     return batch
 
 
@@ -184,6 +207,24 @@ def create_comparison(project_id: uuid.UUID, payload: ComparisonCreate, db: Sess
     db.flush()
     build_comparison(db, comparison)
     db.refresh(comparison)
+    summary = comparison.summary_json or {}
+    capture_event(
+        user.user_id,
+        "comparison_completed",
+        {
+            "workspace_id": str(user.workspace_id),
+            "project_id": str(project.id),
+            "comparison_id": str(comparison.id),
+            "modified_count": summary.get("MODIFIED", 0),
+            "added_count": summary.get("ADDED", 0),
+            "removed_count": summary.get("REMOVED", 0),
+            "unchanged_count": summary.get("UNCHANGED", 0),
+            "impact_count": summary.get("impact_findings", 0),
+            "high_count": summary.get("high_impact", 0),
+            "medium_count": summary.get("medium_impact", 0),
+            "low_count": summary.get("low_impact", 0),
+        },
+    )
     return comparison_out(comparison)
 
 
@@ -218,6 +259,20 @@ def review_finding(finding_id: uuid.UUID, payload: FindingReview, db: Session = 
         finding.reviewer_note = payload.reviewer_note
     db.commit()
     db.refresh(finding)
+    comparison = db.scalar(select(Comparison).join(RequirementChange).where(RequirementChange.id == finding.requirement_change_id))
+    project = db.get(Project, comparison.project_id) if comparison else None
+    capture_event(
+        user.user_id,
+        "finding_reviewed",
+        {
+            "workspace_id": str(user.workspace_id),
+            "project_id": str(project.id) if project else "",
+            "comparison_id": str(comparison.id) if comparison else "",
+            "finding_id": str(finding.id),
+            "review_action": finding.review_status.value,
+            "effective_severity": finding.severity.value,
+        },
+    )
     return finding_out(finding)
 
 
@@ -254,7 +309,22 @@ def export_pdf(project_id: uuid.UUID, comparison_id: uuid.UUID, type: ReportType
     findings = db.scalars(select(ImpactFinding).join(RequirementChange).where(RequirementChange.comparison_id == comparison_id).order_by(ImpactFinding.severity, RequirementChange.external_id, ImpactFinding.impacted_requirement_external_id)).all()
     pdf_bytes = build_requirements_impact_pdf(project, comparison, imports, changes, findings, report_type=type)
     filename = "radar-comparison-executive-report.pdf" if type == ReportType.EXECUTIVE else "radar-comparison-full-audit-report.pdf"
+    capture_event(
+        user.user_id,
+        "executive_report_exported" if type == ReportType.EXECUTIVE else "full_audit_exported",
+        {"workspace_id": str(user.workspace_id), "project_id": str(project.id), "comparison_id": str(comparison.id), "report_type": type.value},
+    )
     return ExportOut(filename=filename, content_base64=base64.b64encode(pdf_bytes).decode(), media_type="application/pdf")
+
+
+@app.post("/feedback", response_model=FeedbackOut)
+def submit_feedback(payload: FeedbackCreate, db: Session = Depends(get_db), user: UserContext = Depends(get_current_user)):
+    feedback = Feedback(workspace_id=user.workspace_id, user_id=user.user_id, feedback_type=payload.feedback_type, message=payload.message, screen=payload.screen)
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+    capture_event(user.user_id, "feedback_submitted", {"workspace_id": str(user.workspace_id), "feedback_type": feedback.feedback_type, "screen": feedback.screen})
+    return FeedbackOut(id=feedback.id, feedback_type=feedback.feedback_type, screen=feedback.screen)
 
 
 @app.post("/billing/webhook")

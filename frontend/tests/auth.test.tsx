@@ -8,7 +8,7 @@ const mockAuth = vi.hoisted(() => {
     sessionPromise: null as null | Promise<{ data: { session: null }; error: null }>,
     authCallback: null as null | ((_event: string, session: null | { access_token: string; user: { id: string; email?: string } }) => void),
     signInResult: { data: { session: { access_token: "token-1", user: { id: "user-1", email: "user@example.com" } } }, error: null as null | { message: string } },
-    signUpResult: { data: { session: null }, error: null as null | { message: string } },
+    signUpResult: { data: { session: null, user: null as null | { id: string; email?: string } }, error: null as null | { message: string } },
   };
   const supabase = {
     auth: {
@@ -25,6 +25,12 @@ const mockAuth = vi.hoisted(() => {
   return { state, supabase };
 });
 
+const mockTelemetry = vi.hoisted(() => ({
+  captureAnalytics: vi.fn(),
+  identifyAnalyticsUser: vi.fn(),
+  initAnalytics: vi.fn(),
+}));
+
 vi.mock("../src/lib/config", () => ({
   apiUrl: "http://api.test",
   frontendConfig: {
@@ -34,10 +40,18 @@ vi.mock("../src/lib/config", () => ({
     authEnabled: true,
     authConfigError: null,
     isDevelopment: false,
+    telemetryEnabled: false,
+    posthogKey: "",
+    posthogHost: "https://app.posthog.com",
+    sentryDsn: "",
+    sentryEnvironment: "test",
+    sentryRelease: "",
   },
 }));
 
 vi.mock("../src/lib/supabase", () => ({ supabase: mockAuth.supabase }));
+vi.mock("../src/lib/errorMonitoring", () => ({ initErrorMonitoring: vi.fn() }));
+vi.mock("../src/lib/telemetry", () => mockTelemetry);
 
 import { request } from "../src/lib/api";
 import { App } from "../src/main";
@@ -56,7 +70,10 @@ beforeEach(() => {
   mockAuth.state.sessionPromise = null;
   mockAuth.state.authCallback = null;
   mockAuth.state.signInResult = { data: { session: { access_token: "token-1", user: { id: "user-1", email: "user@example.com" } } }, error: null };
-  mockAuth.state.signUpResult = { data: { session: null }, error: null };
+  mockAuth.state.signUpResult = { data: { session: null, user: null }, error: null };
+  mockTelemetry.captureAnalytics.mockClear();
+  mockTelemetry.identifyAnalyticsUser.mockClear();
+  mockTelemetry.initAnalytics.mockClear();
   vi.clearAllMocks();
   mockProjectsResponse();
 });
@@ -106,6 +123,7 @@ describe("frontend Supabase auth", () => {
   });
 
   it("shows signup confirmation when email verification is required", async () => {
+    mockAuth.state.signUpResult = { data: { session: null, user: { id: "new-user-1" } }, error: null };
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Create account" }));
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: "new@example.com" } });
@@ -113,6 +131,7 @@ describe("frontend Supabase auth", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Create account" }).at(-1)!);
     expect(await screen.findByRole("status")).toHaveTextContent("Check your email");
     expect(mockAuth.supabase.auth.signUp).toHaveBeenCalledWith({ email: "new@example.com", password: "secret123" });
+    expect(mockTelemetry.captureAnalytics).toHaveBeenCalledWith("account_created", { user_id: "new-user-1" });
   });
 
   it("logs out authenticated users", async () => {

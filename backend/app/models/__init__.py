@@ -1,6 +1,7 @@
 from app.models.domain import (
     ChangeType,
     Comparison,
+    Feedback,
     ImpactFinding,
     ImportBatch,
     Project,
@@ -14,6 +15,7 @@ from app.models.domain import (
 __all__ = [
     "ChangeType",
     "Comparison",
+    "Feedback",
     "ImpactFinding",
     "ImportBatch",
     "Project",

@@ -13,7 +13,7 @@ function generatedCsv(label: string) {
 test("complete ReqRadar MVP workflow", async ({ page }) => {
   await page.setExtraHTTPHeaders({ "x-dev-user-id": `playwright-e2e-${Date.now()}` });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "ReqRadar" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "ReqRadar" }).first()).toBeVisible();
   await expect(page.getByText("Dev", { exact: true })).toBeVisible();
 
   const projectName = `E2E ${Date.now()}`;

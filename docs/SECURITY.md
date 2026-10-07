@@ -10,6 +10,9 @@ Controls included in the MVP:
 - SQL access uses SQLAlchemy ORM parameterization.
 - CSV export escapes formula-leading values.
 - Optional integrations are disabled without credentials.
+- Product analytics and error monitoring are explicit opt-in. Telemetry payloads exclude uploaded CSV text, requirement content, reviewer notes, authorization headers, cookies, tokens, and request bodies.
+- PostHog autocapture and session replay are disabled; ReqRadar emits a small explicit beta-funnel event set only.
+- Sentry is configured with default PII disabled and request bodies filtered.
 - Responses include request IDs.
 - Basic secure headers are added by middleware, including request ID, content-type, frame, referrer, and frame-ancestor protections.
 

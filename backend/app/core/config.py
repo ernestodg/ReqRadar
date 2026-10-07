@@ -19,11 +19,15 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     supabase_url: str = ""
     supabase_anon_key: str = ""
+    app_release: str = ""
+    telemetry_enabled: bool = False
     posthog_api_key: str = ""
     posthog_host: str = "https://app.posthog.com"
     billing_enabled: bool = False
     paddle_webhook_secret: str = ""
     sentry_dsn: str = ""
+    sentry_environment: str = ""
+    sentry_release: str = ""
     high_threshold: int = 70
     medium_threshold: int = 40
     upload_limit_bytes: int = Field(default=10 * 1024 * 1024)

@@ -10,13 +10,13 @@ os.environ.setdefault("DEV_AUTH_BYPASS", "true")
 
 from app.core.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Comparison, ImpactFinding, ImportBatch, Project, RequirementChange, RequirementSnapshot, Workspace  # noqa: E402
+from app.models import Comparison, Feedback, ImpactFinding, ImportBatch, Project, RequirementChange, RequirementSnapshot, Workspace  # noqa: E402
 
 
 @pytest.fixture()
 def client():
     with SessionLocal() as db:
-        for model in [ImpactFinding, RequirementChange, Comparison, RequirementSnapshot, ImportBatch, Project, Workspace]:
+        for model in [Feedback, ImpactFinding, RequirementChange, Comparison, RequirementSnapshot, ImportBatch, Project, Workspace]:
             db.execute(delete(model))
         db.commit()
     with TestClient(app) as test_client:

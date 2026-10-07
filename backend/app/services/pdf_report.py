@@ -2,13 +2,16 @@ import io
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import lru_cache
+from pathlib import Path
 
+from reportlab import rl_config
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab import rl_config
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Flowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
@@ -29,6 +32,7 @@ GREEN = colors.HexColor("#16a34a")
 SEVERITY_ORDER = [Severity.HIGH, Severity.MEDIUM, Severity.LOW]
 REVIEW_ORDER = [ReviewStatus.CONFIRMED, ReviewStatus.DISMISSED, ReviewStatus.UNREVIEWED]
 rl_config.useA85 = 0
+REPORT_LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "reqradar-logo.png"
 
 
 class ReportType(StrEnum):
@@ -83,15 +87,37 @@ def draw_radar_logo(canvas: Canvas, x: float, y: float, size: float) -> None:
     canvas.restoreState()
 
 
-class RadarLogoFlowable(Flowable):
-    def __init__(self, size: float):
+@lru_cache(maxsize=1)
+def report_logo_image() -> tuple[ImageReader, float]:
+    image = ImageReader(str(REPORT_LOGO_PATH))
+    width, height = image.getSize()
+    return image, height / width
+
+
+def draw_report_logo(canvas: Canvas, x: float, y: float, width: float) -> float:
+    try:
+        image, aspect_ratio = report_logo_image()
+    except OSError:
+        draw_radar_logo(canvas, x, y, width / 3)
+        return width / 3
+
+    height = width * aspect_ratio
+    canvas.drawImage(image, x, y, width=width, height=height, mask="auto", preserveAspectRatio=True)
+    return height
+
+
+class ReportLogoFlowable(Flowable):
+    def __init__(self, width: float):
         super().__init__()
-        self.width = size
-        self.height = size
-        self.size = size
+        self.width = width
+        try:
+            _, aspect_ratio = report_logo_image()
+        except OSError:
+            aspect_ratio = 1 / 3
+        self.height = width * aspect_ratio
 
     def draw(self) -> None:
-        draw_radar_logo(self.canv, 0, 0, self.size)
+        draw_report_logo(self.canv, 0, 0, self.width)
 
 
 class ReportCanvas(Canvas):
@@ -120,13 +146,13 @@ class ReportCanvas(Canvas):
         self.setStrokeColor(LINE)
         self.setLineWidth(0.5)
         self.line(0.6 * inch, height - 0.55 * inch, width - 0.6 * inch, height - 0.55 * inch)
-        logo_size = 0.18 * inch
         logo_x = 0.6 * inch
-        logo_y = height - 0.47 * inch
-        draw_radar_logo(self, logo_x, logo_y, logo_size)
+        logo_width = 1.3 * inch
+        logo_y = height - 0.48 * inch
+        draw_report_logo(self, logo_x, logo_y, logo_width)
         self.setFillColor(NAVY)
         self.setFont("Helvetica-Bold", 8.5)
-        self.drawString(logo_x + logo_size + 0.08 * inch, height - 0.38 * inch, f"ReqRadar | {self.report_label}")
+        self.drawString(logo_x + logo_width + 0.08 * inch, height - 0.34 * inch, f"ReqRadar | {self.report_label}")
         self.setFont("Helvetica", 8)
         self.setFillColor(MUTED)
         self.drawRightString(width - 0.6 * inch, height - 0.38 * inch, self.project_name[:70])
@@ -261,8 +287,8 @@ def executive_summary(project: Project, comparison: Comparison, baseline: str, t
 
 def brand_title(styles: dict[str, ParagraphStyle]) -> Table:
     table = Table(
-        [[RadarLogoFlowable(0.32 * inch), Paragraph("ReqRadar", styles["title"])]],
-        colWidths=[0.4 * inch, 1.55 * inch],
+        [[ReportLogoFlowable(2.35 * inch)]],
+        colWidths=[2.35 * inch],
         hAlign="CENTER",
     )
     table.setStyle(
